@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 
-from ossie_starrocks import Compiler, Query
+from ossie_starrocks import Compiler, FieldFilter, MetricFilter, Query
 
 
 CONTAINER = os.environ.get("STARROCKS_CONTAINER", "ossie-starrocks-live")
@@ -179,6 +179,66 @@ assert_same(
     ) customer_stage
     ON order_stage.country = customer_stage.country
        OR (order_stage.country IS NULL AND customer_stage.country IS NULL)
+    ORDER BY COALESCE(order_stage.country, customer_stage.country)
+    """,
+)
+
+filtered_cross_grain = compiler.compile(
+    Query(
+        metrics=("orders_per_customer",),
+        dimensions=("customers.country",),
+        where=(FieldFilter("customers.country", "eq", "TW"),),
+    )
+)
+assert_same(
+    "safe filter pushed into every cross-grain stage",
+    filtered_cross_grain.sql + " ORDER BY d0",
+    """
+    SELECT order_stage.country,
+           order_stage.value / customer_stage.value
+    FROM (
+        SELECT c.country, COUNT(o.customer_id) AS value
+        FROM orders o JOIN customers c ON o.customer_id = c.customer_id
+        WHERE c.country = 'TW'
+        GROUP BY c.country
+    ) order_stage
+    JOIN (
+        SELECT country, COUNT(customer_id) AS value
+        FROM customers
+        WHERE country = 'TW'
+        GROUP BY country
+    ) customer_stage
+    ON order_stage.country = customer_stage.country
+    ORDER BY order_stage.country
+    """,
+)
+
+having_cross_grain = compiler.compile(
+    Query(
+        metrics=("orders_per_customer",),
+        dimensions=("customers.country",),
+        having=(MetricFilter("orders_per_customer", "gt", 1),),
+    )
+)
+assert_same(
+    "cross-grain metric filter after stage join",
+    having_cross_grain.sql + " ORDER BY d0",
+    """
+    SELECT COALESCE(order_stage.country, customer_stage.country),
+           order_stage.value / customer_stage.value
+    FROM (
+        SELECT c.country, COUNT(o.customer_id) AS value
+        FROM orders o JOIN customers c ON o.customer_id = c.customer_id
+        GROUP BY c.country
+    ) order_stage
+    FULL OUTER JOIN (
+        SELECT country, COUNT(customer_id) AS value
+        FROM customers
+        GROUP BY country
+    ) customer_stage
+    ON order_stage.country = customer_stage.country
+       OR (order_stage.country IS NULL AND customer_stage.country IS NULL)
+    WHERE order_stage.value / customer_stage.value > 1
     ORDER BY COALESCE(order_stage.country, customer_stage.country)
     """,
 )

@@ -4,7 +4,7 @@
 
 The compiler fails closed. It returns no SQL when a request has mixed metric grains, a fan-out join, more than one valid join path, an unknown reference, or an expression outside the supported profile.
 
-This project is an early implementation. The supported profile below passes the automated behavior suite, but it has not completed live StarRocks differential testing or full Apache Ossie conformance testing.
+This project is an early implementation. The supported profile below passes the automated behavior suite and a live StarRocks 3.5 differential workflow, but it has not completed full Apache Ossie conformance testing.
 
 ## Install the package
 
@@ -73,7 +73,8 @@ The current release accepts the following model and query features.
 - Table-backed sources with one to three identifier components.
 - Dataset fields with `ANSI_SQL`, `OSSIE_SQL_2026`, or 0.3 `expression.sql` expressions.
 - Root-level metrics and dataset-scoped metrics.
-- Ossie 0.3 `AGG(dataset.metric)` evaluation through independent aggregate CTE stages, including cross-grain grouping when every stage has a safe many-to-one path to the requested dimensions. Cross-grain filters still fail closed pending filter-placement semantics.
+- Ossie 0.3 `AGG(dataset.metric)` evaluation through independent aggregate CTE stages, including cross-grain grouping when every stage has a safe many-to-one path to the requested dimensions.
+- Cross-grain field filters are pushed into every aggregate stage only when each stage can reach the filtered field through a safe many-to-one path. Cross-grain metric filters are evaluated after the stages are joined. Unsafe fan-out traversal fails closed.
 - `SUM`, `COUNT`, `MIN`, `MAX`, and `AVG` aggregates.
 - `COUNT(DISTINCT ...)`, `SUM(DISTINCT ...)`, and aggregate `FILTER (WHERE ...)`; filters are lowered to NULL-preserving conditional aggregates for StarRocks.
 - Direct StarRocks lowering for a verified OSSIE SQL scalar subset: case/trim/length and substring functions, basic numeric functions, date-part extraction, and `DATE_TRUNC`.
@@ -105,9 +106,11 @@ Static compilation trusts the model's key declarations. It cannot prove that Sta
 ./scripts/verify.sh
 ```
 
-The script compiles the package and runs the library and CLI behavior tests. A live StarRocks differential suite remains a separate release requirement.
+The script compiles the package and runs the library and CLI behavior tests. Live execution remains a separate workflow because it requires Docker and a running StarRocks container.
 
 The manually triggered `live-starrocks` GitHub workflow starts the official `starrocks/allin1-ubuntu:3.5-latest` image, loads deterministic fixture data, and compares generated queries with hand-written StarRocks baseline queries. Its source is [`scripts/live_starrocks.py`](scripts/live_starrocks.py).
+
+Research on using the same semantic model through Trino is available in [`docs/research/trino-ossie.md`](docs/research/trino-ossie.md). The recommended route is an external Ossie semantic compiler that emits Trino SQL; neither Apache Ossie nor Trino currently ships a direct Ossie runtime integration.
 
 ## Architecture
 

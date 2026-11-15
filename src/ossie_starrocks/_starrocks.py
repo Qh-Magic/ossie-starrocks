@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from ._expressions import Between, Binary, Call, Case, Column, Expr, FilteredAggregate, InList, IsNull, Like, Literal as ExprLiteral, MeasureRef, Star, Unary
-from ._model import BoundModel
+from ._model import BoundModel, Metric
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 from .api import CompilationError, CompiledQuery, OutputColumn
 from .planning import MultiStageQueryPlan, PlannedFilter, QueryPlan
@@ -70,6 +70,8 @@ def _render_multistage_query(model: BoundModel, plan: MultiStageQueryPlan) -> Co
                 for left, right in edge.keys
             )
             lines.append(f"INNER JOIN {_render_table(model, edge.one)} AS {aliases[edge.one]} ON {conditions}")
+        if plan.where:
+            lines.append("WHERE " + " AND ".join(_render_filter(item, aliases) for item in plan.where))
         if plan.dimensions:
             lines.append("GROUP BY " + ", ".join(_render_expr(field.expression, aliases) for field in plan.dimensions))
         lines[-1] += ")"
@@ -101,6 +103,11 @@ def _render_multistage_query(model: BoundModel, plan: MultiStageQueryPlan) -> Co
             from_clause += f"\nFULL OUTER JOIN {stage_name} ON " + " AND ".join(conditions)
             joined.append(stage_name)
         lines.append(from_clause)
+    if plan.having:
+        lines.append(
+            "WHERE "
+            + " AND ".join(_render_multistage_filter(item, stage_names) for item in plan.having)
+        )
     if plan.limit is not None:
         lines.append(f"LIMIT {plan.limit}")
     dependencies = tuple(
@@ -111,6 +118,16 @@ def _render_multistage_query(model: BoundModel, plan: MultiStageQueryPlan) -> Co
         )
     )
     return CompiledQuery("\n".join(lines), tuple(columns), dependencies)
+
+def _render_multistage_filter(item: PlannedFilter, stages: dict[tuple[str, str], str]) -> str:
+    assert isinstance(item.expression_owner, Metric)
+    left = _render_multistage_expr(item.expression_owner.expression, stages)
+    if item.op == "is_null":
+        return f"{left} IS NULL"
+    if item.op == "is_not_null":
+        return f"{left} IS NOT NULL"
+    operator = {"eq": "=", "ne": "<>", "lt": "<", "le": "<=", "gt": ">", "ge": ">="}[item.op]
+    return f"{left} {operator} {_literal(item.value)}"
 
 def _render_multistage_expr(expression: Expr, stages: dict[tuple[str, str], str]) -> str:
     if isinstance(expression, MeasureRef):

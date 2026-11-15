@@ -571,7 +571,35 @@ class CompilerTests(unittest.TestCase):
         self.assertIn("COALESCE(s0.`k0`, s1.`k0`) AS `d0`", result.sql)
         self.assertIn("(s0.`value` / s1.`value`) AS `m0`", result.sql)
 
-    def test_ossie_03_cross_grain_where_fails_closed(self):
+    def test_ossie_03_pushes_safe_where_into_every_cross_grain_stage(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["metrics"] = [
+            {"name": "orders_count", "expression": {"sql": "COUNT(customer_id)"}}
+        ]
+        model["datasets"][1]["metrics"] = [
+            {"name": "customers_count", "expression": {"sql": "COUNT(customer_id)"}}
+        ]
+        model["metrics"] = [
+            {
+                "name": "ratio",
+                "expression": {"sql": "AGG(orders.orders_count) / AGG(customers.customers_count)"},
+            }
+        ]
+
+        result = self.compile(
+            model,
+            Query(
+                metrics=("ratio",),
+                where=(FieldFilter("customers.country", "eq", "TW"),),
+            ),
+        )
+
+        self.assertEqual(2, result.sql.count("WHERE"))
+        self.assertIn("WHERE t1.`country` = 'TW'", result.sql)
+        self.assertIn("WHERE t0.`country` = 'TW'", result.sql)
+
+    def test_ossie_03_cross_grain_where_rejects_fanout_stage(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"
         model["datasets"][0]["metrics"] = [
@@ -588,10 +616,37 @@ class CompilerTests(unittest.TestCase):
         ]
 
         self.assert_error(
-            "MULTISTAGE_UNSUPPORTED_SHAPE",
+            "FANOUT_JOIN",
             model,
-            Query(metrics=("ratio",), where=(FieldFilter("customers.country", "eq", "TW"),)),
+            Query(metrics=("ratio",), where=(FieldFilter("orders.status", "eq", "complete"),)),
         )
+
+    def test_ossie_03_applies_cross_grain_having_after_stage_join(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["metrics"] = [
+            {"name": "orders_count", "expression": {"sql": "COUNT(customer_id)"}}
+        ]
+        model["datasets"][1]["metrics"] = [
+            {"name": "customers_count", "expression": {"sql": "COUNT(customer_id)"}}
+        ]
+        model["metrics"] = [
+            {
+                "name": "ratio",
+                "expression": {"sql": "AGG(orders.orders_count) / AGG(customers.customers_count)"},
+            }
+        ]
+
+        result = self.compile(
+            model,
+            Query(
+                metrics=("ratio",),
+                dimensions=("customers.country",),
+                having=(MetricFilter("ratio", "gt", 1),),
+            ),
+        )
+
+        self.assertIn("WHERE (s0.`value` / s1.`value`) > 1", result.sql)
 
     def test_ossie_03_rejects_agg_of_a_field(self):
         model = sales_model()
