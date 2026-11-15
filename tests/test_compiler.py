@@ -104,14 +104,22 @@ class CompilerTests(unittest.TestCase):
             Query(metrics=("revenue",), dimensions=("customers.missing",)),
         )
 
-    def test_rejects_mixed_metric_grain(self):
+    def test_plans_metrics_from_different_home_datasets_in_stages(self):
         model = sales_model()
         model["datasets"][1]["metrics"] = [metric("customer_count", "COUNT(customer_id)")]
-        self.assert_error(
-            "MIXED_GRAIN",
+        result = self.compile(
             model,
-            Query(metrics=("revenue", "customers.customer_count")),
+            Query(
+                metrics=("revenue", "customers.customer_count"),
+                dimensions=("customers.country",),
+            ),
         )
+
+        self.assertIn("SUM(t0.`amount`) AS `value`, 1 AS `present`", result.sql)
+        self.assertIn("COUNT(t0.`customer_id`) AS `value`, 1 AS `present`", result.sql)
+        self.assertIn("FULL OUTER JOIN s1", result.sql)
+        self.assertIn("THEN NULL ELSE s0.`value` END AS `m0`", result.sql)
+        self.assertIn("THEN 0 ELSE s1.`value` END AS `m1`", result.sql)
 
     def test_rejects_reverse_fanout(self):
         model = sales_model()
@@ -576,16 +584,16 @@ class CompilerTests(unittest.TestCase):
         result = self.compile(model, Query(metrics=("ratio",)))
 
         self.assertIn(
-            "s0 AS (SELECT COUNT(t0.`customer_id`) AS `value`\nFROM "
+            "s0 AS (SELECT COUNT(t0.`customer_id`) AS `value`, 1 AS `present`\nFROM "
             "`default_catalog`.`sales`.`orders` AS t0)",
             result.sql,
         )
         self.assertIn(
-            "s1 AS (SELECT COUNT(t0.`customer_id`) AS `value`\nFROM "
+            "s1 AS (SELECT COUNT(t0.`customer_id`) AS `value`, 1 AS `present`\nFROM "
             "`default_catalog`.`sales`.`customers` AS t0)",
             result.sql,
         )
-        self.assertIn("SELECT (s0.`value` / s1.`value`) AS `m0`", result.sql)
+        self.assertIn("SELECT (CASE WHEN s0.`present` IS NULL THEN 0", result.sql)
         self.assertIn("FROM s0 CROSS JOIN s1", result.sql)
         self.assertEqual(("orders", "customers"), result.dependencies)
 
@@ -612,7 +620,8 @@ class CompilerTests(unittest.TestCase):
         self.assertIn("t0.`country` AS `k0`, COUNT(t0.`customer_id`) AS `value`", result.sql)
         self.assertIn("FULL OUTER JOIN s1 ON", result.sql)
         self.assertIn("COALESCE(s0.`k0`, s1.`k0`) AS `d0`", result.sql)
-        self.assertIn("(s0.`value` / s1.`value`) AS `m0`", result.sql)
+        self.assertIn("CASE WHEN s0.`present` IS NULL THEN 0", result.sql)
+        self.assertIn("CASE WHEN s1.`present` IS NULL THEN 0", result.sql)
 
     def test_ossie_03_pushes_safe_where_into_every_cross_grain_stage(self):
         model = sales_model()
@@ -689,7 +698,8 @@ class CompilerTests(unittest.TestCase):
             ),
         )
 
-        self.assertIn("WHERE (s0.`value` / s1.`value`) > 1", result.sql)
+        self.assertIn("WHERE (CASE WHEN s0.`present` IS NULL THEN 0", result.sql)
+        self.assertIn("CASE WHEN s1.`present` IS NULL THEN 0 ELSE s1.`value` END) > 1", result.sql)
 
     def test_ossie_03_rejects_agg_of_a_field(self):
         model = sales_model()

@@ -162,6 +162,36 @@ assert_same(
     """,
 )
 
+multi_home_metrics = compiler.compile(
+    Query(
+        metrics=("revenue", "customers.customers_count"),
+        dimensions=("customers.country",),
+    )
+)
+assert_same(
+    "metrics from different home datasets",
+    multi_home_metrics.sql + " ORDER BY d0",
+    """
+    WITH order_stage AS (
+        SELECT c.country, SUM(o.amount) AS value, 1 AS present
+        FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
+        GROUP BY c.country
+    ), customer_stage AS (
+        SELECT country, COUNT(customer_id) AS value, 1 AS present
+        FROM customers
+        GROUP BY country
+    )
+    SELECT COALESCE(order_stage.country, customer_stage.country),
+           CASE WHEN order_stage.present IS NULL THEN NULL ELSE order_stage.value END,
+           CASE WHEN customer_stage.present IS NULL THEN 0 ELSE customer_stage.value END
+    FROM order_stage
+    FULL OUTER JOIN customer_stage
+      ON order_stage.country = customer_stage.country
+         OR (order_stage.country IS NULL AND customer_stage.country IS NULL)
+    ORDER BY COALESCE(order_stage.country, customer_stage.country)
+    """,
+)
+
 cross_grain = compiler.compile(Query(metrics=("orders_per_customer",)))
 assert_same(
     "global cross-grain multi-stage aggregate",

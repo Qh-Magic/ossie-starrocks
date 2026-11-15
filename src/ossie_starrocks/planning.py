@@ -28,12 +28,16 @@ class QueryPlan:
 
 @dataclass(frozen=True)
 class MultiStageStage:
-    reference: MeasureRef
+    key: str
+    root: str
+    expression: Expr
     joins: SafeJoinTree
 
 @dataclass(frozen=True)
 class MultiStageQueryPlan:
     metrics: tuple[Metric, ...]
+    metric_stage_keys: tuple[str | None, ...]
+    direct_stage_keys: tuple[tuple[str, str], ...]
     dimensions: tuple[Field, ...]
     stages: tuple[MultiStageStage, ...]
     where: tuple[PlannedFilter, ...]
@@ -60,19 +64,28 @@ def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPl
     having_pairs = tuple((_metric(model, item.metric, f"$.having[{i}].metric"), item) for i, item in enumerate(query.having))
     multistage = multistage or any(len(metric.roots) > 1 for metric, _ in having_pairs)
     roots.update(metric.root for metric, _ in having_pairs)
-    if not multistage and len(roots) != 1:
-        raise CompilationError("MIXED_GRAIN", "$.metrics", "all selected and HAVING metrics must share one grain", tuple(sorted(roots)))
+    multistage = multistage or len(roots) > 1
     if multistage:
-        references: list[MeasureRef] = []
-        seen_stages: set[tuple[str, str]] = set()
-        for metric in (*metrics, *(metric for metric, _ in having_pairs)):
-            for reference in _multistage_refs(metric.expression):
-                key = (reference.dataset, reference.metric)
+        stage_inputs: list[tuple[str, str, Expr]] = []
+        seen_stages: set[str] = set()
+        direct_stage_keys: dict[str, str] = {}
+        all_metrics = tuple(dict.fromkeys((*metrics, *(metric for metric, _ in having_pairs))))
+        for metric in all_metrics:
+            if len(metric.roots) == 1:
+                assert metric.root is not None
+                key = _direct_stage_key(metric)
+                direct_stage_keys[metric.qualified_name] = key
                 if key not in seen_stages:
-                    references.append(reference)
+                    stage_inputs.append((key, metric.root, metric.expression))
+                    seen_stages.add(key)
+                continue
+            for reference in _multistage_refs(metric.expression):
+                key = _measure_stage_key(reference)
+                if key not in seen_stages:
+                    stage_inputs.append((key, reference.dataset, reference.expression))
                     seen_stages.add(key)
         stages: list[MultiStageStage] = []
-        for reference in references:
+        for key, root, expression in stage_inputs:
             edges: list[Relationship] = []
             seen_edges: set[str] = set()
             required_datasets = {
@@ -80,13 +93,15 @@ def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPl
                 *(field.dataset for field, _ in where_pairs),
             }
             for dataset in sorted(required_datasets):
-                for edge in _unique_path(model, reference.dataset, dataset):
+                for edge in _unique_path(model, root, dataset):
                     if edge.name not in seen_edges:
                         edges.append(edge)
                         seen_edges.add(edge.name)
-            stages.append(MultiStageStage(reference, SafeJoinTree(reference.dataset, tuple(edges))))
+            stages.append(MultiStageStage(key, root, expression, SafeJoinTree(root, tuple(edges))))
         return MultiStageQueryPlan(
             metrics,
+            tuple(direct_stage_keys.get(metric.qualified_name) for metric in metrics),
+            tuple(direct_stage_keys.items()),
             dimensions,
             tuple(stages),
             tuple(PlannedFilter(field, item.op, item.value) for field, item in where_pairs),
@@ -203,6 +218,14 @@ def _multistage_refs(expression: Expr) -> tuple[MeasureRef, ...]:
     if not found:
         raise CompilationError("MULTISTAGE_UNSUPPORTED_EXPRESSION", "$.metrics", "cross-grain expression has no AGG metric references")
     return tuple(found)
+
+def _measure_stage_key(reference: MeasureRef) -> str:
+    return f"measure:{reference.dataset}.{reference.metric}"
+
+def _direct_stage_key(metric: Metric) -> str:
+    if metric.qualified_name != metric.name:
+        return f"measure:{metric.qualified_name}"
+    return f"metric:{metric.qualified_name}"
 
 def _field(model: BoundModel, name: str, location: str) -> Field:
     field = model.field_by_name.get(name)

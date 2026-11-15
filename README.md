@@ -76,6 +76,7 @@ The current release accepts the following model and query features.
 - Dimension-only queries. The planner infers the one requested dimension dataset that can safely reach every other dimension and returns distinct tuples; it rejects requests with no safe anchor.
 - Ossie 0.3 `AGG(dataset.metric)` evaluation through independent aggregate CTE stages, including cross-grain grouping when every stage has a safe many-to-one path to the requested dimensions.
 - Cross-grain field filters are pushed into every aggregate stage only when each stage can reach the filtered field through a safe many-to-one path. Cross-grain metric filters are evaluated after the stages are joined. Unsafe fan-out traversal fails closed.
+- Metrics from different home datasets are evaluated in independent branches and stitched with null-safe full outer joins. A branch-presence marker supplies each metric's true empty-input value, so a missing `COUNT` becomes `0` while a missing or all-NULL `SUM` remains `NULL`.
 - `SUM`, `COUNT`, `MIN`, `MAX`, and `AVG` aggregates.
 - `COUNT(DISTINCT ...)`, `SUM(DISTINCT ...)`, and aggregate `FILTER (WHERE ...)`; filters are lowered to NULL-preserving conditional aggregates for StarRocks.
 - Direct StarRocks lowering for a verified OSSIE SQL scalar subset: case/trim/length and substring functions, basic numeric functions, date-part extraction, and `DATE_TRUNC`.
