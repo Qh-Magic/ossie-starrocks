@@ -80,7 +80,7 @@ The current release accepts the following model and query features.
 - Model-scoped metrics may combine aggregate components from different datasets directly, such as `SUM(orders.amount) / COUNT(customers.customer_id)`. Each aggregate call must read exactly one home dataset; the planner stages the components independently and evaluates the scalar expression after stitching.
 - `SUM`, `COUNT`, `MIN`, `MAX`, and `AVG` aggregates.
 - `COUNT(DISTINCT ...)`, `SUM(DISTINCT ...)`, and aggregate `FILTER (WHERE ...)`; filters are lowered to NULL-preserving conditional aggregates for StarRocks.
-- Direct StarRocks lowering for a verified OSSIE SQL scalar subset: required conditional functions (`COALESCE`, `NULLIF`, `IF`, `IFNULL`), case/trim/length and substring functions, basic numeric functions, date-part extraction, and `DATE_TRUNC`.
+- Direct StarRocks lowering for a verified OSSIE SQL scalar subset: required conditional functions (`COALESCE`, `NULLIF`, `IF`, `IFNULL`) plus the Ossie aliases `IFF`, `NVL`, `NVL2`, `ZEROIFNULL`, and `NULLIFZERO`, case/trim/length and substring functions, basic numeric functions, date-part extraction, and `DATE_TRUNC`.
 - Arithmetic above aggregate expressions.
 - Structured predicates and conditional expressions: comparisons, `AND`, `OR`, `NOT`, `IS [NOT] NULL`, `IN`, `BETWEEN`, `LIKE` and their `NOT` forms, searched `CASE WHEN`, unary signs, and modulo.
 - Relationships whose target columns match a declared primary key or unique key.

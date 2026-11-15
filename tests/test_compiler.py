@@ -432,6 +432,53 @@ class CompilerTests(unittest.TestCase):
             result.sql,
         )
 
+    def test_ossie_03_lowers_required_conditional_aliases_to_starrocks(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {
+                "name": "normalized_revenue",
+                "expression": {
+                    "sql": (
+                        "IFF(COUNT(orders.customer_id) > 0, "
+                        "NVL2(SUM(orders.amount), ZEROIFNULL(SUM(orders.amount)), 0), "
+                        "NVL(NULLIFZERO(COUNT(orders.customer_id)), 0))"
+                    )
+                },
+            }
+        ]
+
+        result = self.compile(model, Query(metrics=("normalized_revenue",)))
+
+        self.assertIn("IF((COUNT(t0.`customer_id`) > 0)", result.sql)
+        self.assertIn("IF(SUM(t0.`amount`) IS NOT NULL", result.sql)
+        self.assertIn("IFNULL(SUM(t0.`amount`), 0)", result.sql)
+        self.assertIn("IFNULL(NULLIF(COUNT(t0.`customer_id`), 0), 0)", result.sql)
+        for ossie_alias in ("IFF(", "NVL(", "NVL2(", "ZEROIFNULL(", "NULLIFZERO("):
+            self.assertNotIn(ossie_alias, result.sql)
+
+    def test_ossie_03_lowers_conditional_aliases_after_stage_stitching(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {
+                "name": "safe_ratio",
+                "expression": {
+                    "sql": "NVL(SUM(orders.amount), 0) / NULLIFZERO(COUNT(customers.customer_id))"
+                },
+            }
+        ]
+
+        result = self.compile(
+            model,
+            Query(metrics=("safe_ratio",), dimensions=("customers.country",)),
+        )
+
+        self.assertIn("IFNULL(CASE WHEN s0.`present` IS NULL", result.sql)
+        self.assertIn("NULLIF(CASE WHEN s1.`present` IS NULL", result.sql)
+        self.assertNotIn("NVL(", result.sql)
+        self.assertNotIn("NULLIFZERO(", result.sql)
+
     def test_ossie_03_validates_conditional_function_arity(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"

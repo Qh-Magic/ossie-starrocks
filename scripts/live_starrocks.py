@@ -144,6 +144,17 @@ model = {
                 "sql": "COALESCE(SUM(orders.amount), 0) / NULLIF(COUNT(customers.customer_id), 0)"
             },
         },
+        {
+            "name": "aliased_revenue_per_customer",
+            "expression": {
+                "sql": (
+                    "IFF(NULLIFZERO(COUNT(customers.customer_id)) IS NULL, 0, "
+                    "NVL2(SUM(orders.amount), "
+                    "ZEROIFNULL(SUM(orders.amount)) / NULLIFZERO(COUNT(customers.customer_id)), "
+                    "NVL(SUM(orders.amount), 0)))"
+                )
+            },
+        },
     ],
 }
 
@@ -239,6 +250,39 @@ conditional_component_metric = compiler.compile(
         metrics=("safe_revenue_per_customer",),
         dimensions=("customers.country",),
     )
+)
+
+aliased_conditional_metric = compiler.compile(
+    Query(
+        metrics=("aliased_revenue_per_customer",),
+        dimensions=("customers.country",),
+    )
+)
+assert_same(
+    "required conditional aliases lowered across components",
+    aliased_conditional_metric.sql + " ORDER BY d0",
+    """
+    WITH order_stage AS (
+        SELECT c.country, SUM(o.amount) AS value
+        FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
+        GROUP BY c.country
+    ), customer_stage AS (
+        SELECT country, COUNT(customer_id) AS value
+        FROM customers
+        GROUP BY country
+    )
+    SELECT COALESCE(order_stage.country, customer_stage.country),
+           IF(NULLIF(COALESCE(customer_stage.value, 0), 0) IS NULL,
+              0,
+              IF(order_stage.value IS NOT NULL,
+                 IFNULL(order_stage.value, 0) / NULLIF(COALESCE(customer_stage.value, 0), 0),
+                 IFNULL(order_stage.value, 0)))
+    FROM order_stage
+    FULL OUTER JOIN customer_stage
+      ON order_stage.country = customer_stage.country
+         OR (order_stage.country IS NULL AND customer_stage.country IS NULL)
+    ORDER BY COALESCE(order_stage.country, customer_stage.country)
+    """,
 )
 assert_same(
     "required conditional functions across components",

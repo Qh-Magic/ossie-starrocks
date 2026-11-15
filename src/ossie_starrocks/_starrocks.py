@@ -196,7 +196,10 @@ def _render_multistage_expr(expression: Expr, stages: dict[str, str], stage_by_k
         operator = "NOT LIKE" if expression.negated else "LIKE"
         return f"({_render_multistage_expr(expression.operand, stages, stage_by_key)} {operator} {_render_multistage_expr(expression.pattern, stages, stage_by_key)})"
     if isinstance(expression, Call) and expression.name in SUPPORTED_SCALAR_FUNCTIONS:
-        return f"{expression.name}({', '.join(_render_multistage_expr(argument, stages, stage_by_key) for argument in expression.args)})"
+        return _render_scalar_call(
+            expression.name,
+            tuple(_render_multistage_expr(argument, stages, stage_by_key) for argument in expression.args),
+        )
     raise CompilationError("MULTISTAGE_UNSUPPORTED_EXPRESSION", "$.metrics", "unsupported node in cross-grain expression")
 
 def _render_stage_value(key: str, stages: dict[str, str], stage_by_key: dict[str, MultiStageStage]) -> str:
@@ -211,7 +214,10 @@ def _render_empty_input(expression: Expr) -> str:
         if expression.name in SUPPORTED_AGGREGATES:
             return "0" if expression.name == "COUNT" else "NULL"
         if expression.name in SUPPORTED_SCALAR_FUNCTIONS:
-            return f"{expression.name}({', '.join(_render_empty_input(argument) for argument in expression.args)})"
+            return _render_scalar_call(
+                expression.name,
+                tuple(_render_empty_input(argument) for argument in expression.args),
+            )
     if isinstance(expression, FilteredAggregate):
         return "0" if expression.aggregate.name == "COUNT" else "NULL"
     if isinstance(expression, MeasureRef):
@@ -284,7 +290,10 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
         if expression.name not in SUPPORTED_AGGREGATES and expression.name not in SUPPORTED_SCALAR_FUNCTIONS:
             raise CompilationError("UNSUPPORTED_EXPRESSION", "$.expression", f"unsupported function {expression.name}")
         distinct = "DISTINCT " if expression.distinct else ""
-        return f"{expression.name}({distinct}{', '.join(_render_expr(arg, aliases) for arg in expression.args)})"
+        arguments = tuple(_render_expr(arg, aliases) for arg in expression.args)
+        if expression.name in SUPPORTED_SCALAR_FUNCTIONS:
+            return _render_scalar_call(expression.name, arguments)
+        return f"{expression.name}({distinct}{', '.join(arguments)})"
     if isinstance(expression, FilteredAggregate):
         aggregate = expression.aggregate
         predicate = _render_expr(expression.predicate, aliases)
@@ -298,6 +307,19 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
     if isinstance(expression, MeasureRef):
         return _render_expr(expression.expression, aliases)
     raise AssertionError(expression)
+
+def _render_scalar_call(name: str, arguments: tuple[str, ...]) -> str:
+    if name == "IFF":
+        name = "IF"
+    elif name == "NVL":
+        name = "IFNULL"
+    elif name == "NVL2":
+        return f"IF({arguments[0]} IS NOT NULL, {arguments[1]}, {arguments[2]})"
+    elif name == "ZEROIFNULL":
+        return f"IFNULL({arguments[0]}, 0)"
+    elif name == "NULLIFZERO":
+        return f"NULLIF({arguments[0]}, 0)"
+    return f"{name}({', '.join(arguments)})"
 
 def _render_filter(item: QueryFilter, aliases: dict[str, str]) -> str:
     if isinstance(item, PlannedExpressionFilter):
