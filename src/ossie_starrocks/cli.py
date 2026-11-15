@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(request, dict):
             raise CompilationError("INVALID_REQUEST", "$", "request must be an object")
         query = Query(
-            metrics=_strings(request.get("metrics"), "$.metrics"),
+            metrics=_strings(request.get("metrics", []), "$.metrics"),
             dimensions=_strings(request.get("dimensions", []), "$.dimensions"),
             where=tuple(_field_filter(item, index) for index, item in enumerate(_objects(request.get("where", []), "$.where"))),
             having=tuple(_metric_filter(item, index) for index, item in enumerate(_objects(request.get("having", []), "$.having"))),

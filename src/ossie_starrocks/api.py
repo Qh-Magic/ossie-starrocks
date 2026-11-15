@@ -27,7 +27,7 @@ class MetricFilter:
 
 @dataclass(frozen=True)
 class Query:
-    metrics: tuple[str, ...]
+    metrics: tuple[str, ...] = ()
     dimensions: tuple[str, ...] = ()
     where: tuple[FieldFilter, ...] = ()
     having: tuple[MetricFilter, ...] = ()

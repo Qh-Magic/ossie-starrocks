@@ -137,6 +137,20 @@ model = {
 
 compiler = Compiler.from_text(json.dumps(model), format="json")
 
+dimension_only = compiler.compile(
+    Query(dimensions=("orders.status", "customers.country"))
+)
+assert_same(
+    "dimension-only query with inferred anchor",
+    dimension_only.sql + " ORDER BY d0, d1",
+    """
+    SELECT o.status, c.country
+    FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
+    GROUP BY o.status, c.country
+    ORDER BY o.status, c.country
+    """,
+)
+
 grouped = compiler.compile(Query(metrics=("revenue",), dimensions=("customers.country",)))
 assert_same(
     "joined dimension and aggregate",

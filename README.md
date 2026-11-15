@@ -73,6 +73,7 @@ The current release accepts the following model and query features.
 - Table-backed sources with one to three identifier components.
 - Dataset fields with `ANSI_SQL`, `OSSIE_SQL_2026`, or 0.3 `expression.sql` expressions.
 - Root-level metrics and dataset-scoped metrics.
+- Dimension-only queries. The planner infers the one requested dimension dataset that can safely reach every other dimension and returns distinct tuples; it rejects requests with no safe anchor.
 - Ossie 0.3 `AGG(dataset.metric)` evaluation through independent aggregate CTE stages, including cross-grain grouping when every stage has a safe many-to-one path to the requested dimensions.
 - Cross-grain field filters are pushed into every aggregate stage only when each stage can reach the filtered field through a safe many-to-one path. Cross-grain metric filters are evaluated after the stages are joined. Unsafe fan-out traversal fails closed.
 - `SUM`, `COUNT`, `MIN`, `MAX`, and `AVG` aggregates.

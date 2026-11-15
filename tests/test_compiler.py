@@ -54,6 +54,49 @@ class CompilerTests(unittest.TestCase):
         self.assertIn("HAVING SUM(t0.`amount`) > 100", result.sql)
         self.assertTrue(result.sql.endswith("LIMIT 10"))
 
+    def test_compiles_dimension_only_query_from_its_dataset(self):
+        result = self.compile(
+            sales_model(),
+            Query(dimensions=("customers.country",)),
+        )
+
+        self.assertEqual(
+            "SELECT t0.`country` AS `d0`\n"
+            "FROM `default_catalog`.`sales`.`customers` AS t0\n"
+            "GROUP BY t0.`country`",
+            result.sql,
+        )
+        self.assertEqual(("customers.country",), tuple(c.semantic_name for c in result.columns))
+
+    def test_dimension_only_query_uses_many_side_as_anchor(self):
+        result = self.compile(
+            sales_model(),
+            Query(dimensions=("orders.status", "customers.country")),
+        )
+
+        self.assertIn("FROM `default_catalog`.`sales`.`orders` AS t0", result.sql)
+        self.assertIn("LEFT JOIN `default_catalog`.`sales`.`customers` AS t1", result.sql)
+        self.assertIn("GROUP BY t0.`status`, t1.`country`", result.sql)
+
+    def test_dimension_only_query_rejects_missing_anchor(self):
+        model = sales_model()
+        model["datasets"].append(
+            {
+                "name": "products",
+                "source": "default_catalog.sales.products",
+                "fields": [field("category", "category")],
+            }
+        )
+
+        self.assert_error(
+            "NO_ANCHOR",
+            model,
+            Query(dimensions=("customers.country", "products.category")),
+        )
+
+    def test_rejects_empty_query(self):
+        self.assert_error("EMPTY_QUERY", sales_model(), Query())
+
     def test_rejects_unknown_reference(self):
         self.assert_error(
             "UNKNOWN_FIELD",
