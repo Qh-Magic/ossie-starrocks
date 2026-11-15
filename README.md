@@ -107,6 +107,8 @@ Static compilation trusts the model's key declarations. It cannot prove that Sta
 
 The script compiles the package and runs the library and CLI behavior tests. A live StarRocks differential suite remains a separate release requirement.
 
+The manually triggered `live-starrocks` GitHub workflow starts the official `starrocks/allin1-ubuntu:3.5-latest` image, loads deterministic fixture data, and compares generated queries with hand-written StarRocks baseline queries. Its source is [`scripts/live_starrocks.py`](scripts/live_starrocks.py).
+
 ## Architecture
 
 The compiler normalizes an Ossie document into immutable datasets, fields, metrics, and a directed many-to-one relationship graph. The planner proves one metric grain and one safe path to every required dataset. The renderer accepts only owned expression nodes and emits one StarRocks `SELECT`.
