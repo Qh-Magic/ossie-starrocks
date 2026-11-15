@@ -388,6 +388,65 @@ class CompilerTests(unittest.TestCase):
 
         self.assert_error("UNSUPPORTED_EXPRESSION", model)
 
+    def test_ossie_03_lowers_distinct_filtered_aggregates(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {
+                "name": "active_customers",
+                "expression": {
+                    "sql": "COUNT(DISTINCT orders.customer_id) FILTER (WHERE orders.status = 'complete')"
+                },
+            },
+            {
+                "name": "active_rows",
+                "expression": {
+                    "sql": "COUNT(*) FILTER (WHERE orders.status = 'complete')"
+                },
+            },
+            {
+                "name": "active_average",
+                "expression": {
+                    "sql": "AVG(orders.amount) FILTER (WHERE orders.status = 'complete')"
+                },
+            },
+        ]
+
+        result = self.compile(
+            model,
+            Query(metrics=("active_customers", "active_rows", "active_average")),
+        )
+
+        self.assertIn(
+            "COUNT(DISTINCT CASE WHEN (t0.`status` = 'complete') THEN t0.`customer_id` END)",
+            result.sql,
+        )
+        self.assertIn(
+            "COUNT(CASE WHEN (t0.`status` = 'complete') THEN 1 END)",
+            result.sql,
+        )
+        self.assertIn(
+            "AVG(CASE WHEN (t0.`status` = 'complete') THEN t0.`amount` END)",
+            result.sql,
+        )
+        self.assertNotIn("ELSE 0", result.sql)
+
+    def test_ossie_03_supports_sum_distinct(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"][0]["expression"] = {"sql": "SUM(DISTINCT orders.amount)"}
+
+        result = self.compile(model, Query(metrics=("revenue",)))
+
+        self.assertIn("SUM(DISTINCT t0.`amount`)", result.sql)
+
+    def test_ossie_03_rejects_distinct_on_unsupported_aggregate(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"][0]["expression"] = {"sql": "AVG(DISTINCT orders.amount)"}
+
+        self.assert_error("INVALID_METRIC_EXPRESSION", model)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,7 @@ import re
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from ._expressions import Between, Binary, Call, Case, Column, Expr, ExpressionError, InList, IsNull, Like, Star, Unary, contains_call, parse, walk
+from ._expressions import Between, Binary, Call, Case, Column, Expr, ExpressionError, FilteredAggregate, InList, IsNull, Like, Star, Unary, contains_call, parse, walk
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 
 
@@ -241,6 +241,8 @@ def _validate_aggregate_shape(expression: Expr, location: str) -> None:
                     raise ModelError("INVALID_METRIC_EXPRESSION", location, "nested aggregate")
                 if len(node.args) != 1:
                     raise ModelError("INVALID_METRIC_EXPRESSION", location, f"{node.name} expects one argument")
+                if node.distinct and node.name not in {"SUM", "COUNT"}:
+                    raise ModelError("INVALID_METRIC_EXPRESSION", location, f"{node.name} does not support DISTINCT in OSSIE_SQL_2026")
                 for argument in node.args:
                     if isinstance(argument, Star):
                         if node.name != "COUNT":
@@ -250,6 +252,8 @@ def _validate_aggregate_shape(expression: Expr, location: str) -> None:
                             raise ModelError("INVALID_METRIC_EXPRESSION", location, "* must be the direct argument of COUNT")
                         visit(argument, True)
             elif node.name in SUPPORTED_SCALAR_FUNCTIONS:
+                if node.distinct:
+                    raise ModelError("INVALID_METRIC_EXPRESSION", location, "DISTINCT may only modify SUM or COUNT")
                 _validate_call_arity(node, location)
                 for argument in node.args:
                     visit(argument, inside_aggregate)
@@ -281,6 +285,11 @@ def _validate_aggregate_shape(expression: Expr, location: str) -> None:
         elif isinstance(node, Like):
             visit(node.operand, inside_aggregate)
             visit(node.pattern, inside_aggregate)
+        elif isinstance(node, FilteredAggregate):
+            if node.aggregate.name not in SUPPORTED_AGGREGATES:
+                raise ModelError("INVALID_METRIC_EXPRESSION", location, "FILTER may only modify an aggregate")
+            visit(node.aggregate, inside_aggregate)
+            visit(node.predicate, True)
 
     visit(expression, False)
 
@@ -288,6 +297,8 @@ def _validate_aggregate_shape(expression: Expr, location: str) -> None:
 def _validate_scalar_calls(expression: Expr, location: str) -> None:
     for node in walk(expression):
         if isinstance(node, Call):
+            if node.distinct:
+                raise ModelError("INVALID_FIELD_EXPRESSION", location, "DISTINCT is only valid in aggregate expressions")
             if node.name not in SUPPORTED_SCALAR_FUNCTIONS:
                 raise ModelError("UNSUPPORTED_EXPRESSION", location, f"unsupported function {node.name}")
             _validate_call_arity(node, location)
@@ -338,7 +349,11 @@ def _expand_fields(fields: list[Field], field_by_name: Mapping[str, Field]) -> t
         if isinstance(expression, Like):
             return Like(expand_expression(expression.operand, stack, owner), expand_expression(expression.pattern, stack, owner), expression.negated)
         if isinstance(expression, Call):
-            return Call(expression.name, tuple(expand_expression(argument, stack, owner) for argument in expression.args))
+            return Call(expression.name, tuple(expand_expression(argument, stack, owner) for argument in expression.args), expression.distinct)
+        if isinstance(expression, FilteredAggregate):
+            aggregate = expand_expression(expression.aggregate, stack, owner)
+            assert isinstance(aggregate, Call)
+            return FilteredAggregate(aggregate, expand_expression(expression.predicate, stack, owner))
         return expression
 
     ordered = [expand(f"{field.dataset}.{field.name}", ()) for field in fields]
@@ -372,7 +387,11 @@ def _expand_expression(expression: Expr, field_by_name: Mapping[str, Field], sta
     if isinstance(expression, Like):
         return Like(_expand_expression(expression.operand, field_by_name, stack, owner), _expand_expression(expression.pattern, field_by_name, stack, owner), expression.negated)
     if isinstance(expression, Call):
-        return Call(expression.name, tuple(_expand_expression(argument, field_by_name, stack, owner) for argument in expression.args))
+        return Call(expression.name, tuple(_expand_expression(argument, field_by_name, stack, owner) for argument in expression.args), expression.distinct)
+    if isinstance(expression, FilteredAggregate):
+        aggregate = _expand_expression(expression.aggregate, field_by_name, stack, owner)
+        assert isinstance(aggregate, Call)
+        return FilteredAggregate(aggregate, _expand_expression(expression.predicate, field_by_name, stack, owner))
     return expression
 
 
@@ -449,7 +468,12 @@ def _resolve_03_metric_expression(
         return Call(
             expression.name,
             tuple(_resolve_03_metric_expression(argument, declared_root, datasets, fields, location) for argument in expression.args),
+            expression.distinct,
         )
+    if isinstance(expression, FilteredAggregate):
+        aggregate = _resolve_03_metric_expression(expression.aggregate, declared_root, datasets, fields, location)
+        assert isinstance(aggregate, Call)
+        return FilteredAggregate(aggregate, _resolve_03_metric_expression(expression.predicate, declared_root, datasets, fields, location))
     return expression
 
 
@@ -611,7 +635,11 @@ def _scope_expression(expression: Expr, default_dataset: str | None, datasets: s
     if isinstance(expression, Like):
         return Like(_scope_expression(expression.operand, default_dataset, datasets), _scope_expression(expression.pattern, default_dataset, datasets), expression.negated)
     if isinstance(expression, Call):
-        return Call(expression.name, tuple(_scope_expression(argument, default_dataset, datasets) for argument in expression.args))
+        return Call(expression.name, tuple(_scope_expression(argument, default_dataset, datasets) for argument in expression.args), expression.distinct)
+    if isinstance(expression, FilteredAggregate):
+        aggregate = _scope_expression(expression.aggregate, default_dataset, datasets)
+        assert isinstance(aggregate, Call)
+        return FilteredAggregate(aggregate, _scope_expression(expression.predicate, default_dataset, datasets))
     if isinstance(expression, (Literal, Star)):
         return expression
     raise AssertionError(expression)

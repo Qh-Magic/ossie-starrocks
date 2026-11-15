@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from ._expressions import Between, Binary, Call, Case, Column, Expr, InList, IsNull, Like, Literal as ExprLiteral, Star, Unary
+from ._expressions import Between, Binary, Call, Case, Column, Expr, FilteredAggregate, InList, IsNull, Like, Literal as ExprLiteral, Star, Unary
 from ._model import BoundModel
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 from .api import CompilationError, CompiledQuery, OutputColumn
@@ -79,7 +79,18 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
     if isinstance(expression, Call):
         if expression.name not in SUPPORTED_AGGREGATES and expression.name not in SUPPORTED_SCALAR_FUNCTIONS:
             raise CompilationError("UNSUPPORTED_EXPRESSION", "$.expression", f"unsupported function {expression.name}")
-        return f"{expression.name}({', '.join(_render_expr(arg, aliases) for arg in expression.args)})"
+        distinct = "DISTINCT " if expression.distinct else ""
+        return f"{expression.name}({distinct}{', '.join(_render_expr(arg, aliases) for arg in expression.args)})"
+    if isinstance(expression, FilteredAggregate):
+        aggregate = expression.aggregate
+        predicate = _render_expr(expression.predicate, aliases)
+        argument = aggregate.args[0]
+        if isinstance(argument, Star):
+            conditional = f"CASE WHEN {predicate} THEN 1 END"
+        else:
+            conditional = f"CASE WHEN {predicate} THEN {_render_expr(argument, aliases)} END"
+        distinct = "DISTINCT " if aggregate.distinct else ""
+        return f"{aggregate.name}({distinct}{conditional})"
     raise AssertionError(expression)
 
 def _render_filter(item: PlannedFilter, aliases: dict[str, str]) -> str:

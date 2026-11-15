@@ -74,6 +74,7 @@ The current release accepts the following model and query features.
 - Dataset fields with `ANSI_SQL`, `OSSIE_SQL_2026`, or 0.3 `expression.sql` expressions.
 - Root-level metrics and dataset-scoped metrics.
 - `SUM`, `COUNT`, `MIN`, `MAX`, and `AVG` aggregates.
+- `COUNT(DISTINCT ...)`, `SUM(DISTINCT ...)`, and aggregate `FILTER (WHERE ...)`; filters are lowered to NULL-preserving conditional aggregates for StarRocks.
 - Direct StarRocks lowering for a verified OSSIE SQL scalar subset: case/trim/length and substring functions, basic numeric functions, date-part extraction, and `DATE_TRUNC`.
 - Arithmetic above aggregate expressions.
 - Structured predicates and conditional expressions: comparisons, `AND`, `OR`, `NOT`, `IS [NOT] NULL`, `IN`, `BETWEEN`, `LIKE` and their `NOT` forms, searched `CASE WHEN`, unary signs, and modulo.

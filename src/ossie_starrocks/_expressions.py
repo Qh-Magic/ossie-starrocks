@@ -77,9 +77,16 @@ class Like:
 class Call:
     name: str
     args: tuple["Expr", ...]
+    distinct: bool = False
 
 
-Expr = Column | Literal | Star | Binary | Unary | IsNull | Case | Between | InList | Like | Call
+@dataclass(frozen=True)
+class FilteredAggregate:
+    aggregate: Call
+    predicate: "Expr"
+
+
+Expr = Column | Literal | Star | Binary | Unary | IsNull | Case | Between | InList | Like | Call | FilteredAggregate
 
 
 _TOKEN = re.compile(
@@ -139,6 +146,18 @@ class _Parser:
         left = self.unary()
         precedence = {"OR": 1, "AND": 2, "=": 3, "!=": 3, "<>": 3, "<": 3, "<=": 3, ">": 3, ">=": 3, "+": 4, "-": 4, "*": 5, "/": 5, "%": 5}
         while True:
+            if self._keyword("FILTER"):
+                if not isinstance(left, Call):
+                    raise ExpressionError("FILTER may only modify an aggregate call")
+                self.take()
+                self.take("lparen")
+                if not self._keyword("WHERE"):
+                    raise ExpressionError("FILTER requires WHERE")
+                self.take()
+                predicate = self.expression()
+                self.take("rparen")
+                left = FilteredAggregate(left, predicate)
+                continue
             if self._keyword("IS"):
                 if 3 < minimum_precedence:
                     break
@@ -263,6 +282,10 @@ class _Parser:
         if self.peek()[0] == "lparen":
             self.take()
             args: list[Expr] = []
+            distinct = False
+            if self._keyword("DISTINCT"):
+                self.take()
+                distinct = True
             if self.peek()[0] != "rparen":
                 while True:
                     args.append(self.expression())
@@ -270,7 +293,9 @@ class _Parser:
                         break
                     self.take()
             self.take("rparen")
-            return Call(keyword, tuple(args))
+            if distinct and not args:
+                raise ExpressionError("DISTINCT requires an argument")
+            return Call(keyword, tuple(args), distinct)
         if self.peek()[0] == "dot":
             self.take()
             second = self.take("identifier")[1]
@@ -311,3 +336,6 @@ def walk(expression: Expr) -> Iterable[Expr]:
     elif isinstance(expression, Call):
         for argument in expression.args:
             yield from walk(argument)
+    elif isinstance(expression, FilteredAggregate):
+        yield from walk(expression.aggregate)
+        yield from walk(expression.predicate)
