@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 
@@ -36,6 +37,27 @@ def assert_same(name: str, generated: str, baseline: str) -> None:
             f"{name} mismatch\ngenerated SQL:\n{generated}\n"
             f"expected rows: {expected!r}\nactual rows: {actual!r}"
         )
+    print(f"PASS {name}: {actual!r}")
+
+
+def assert_numeric_close(name: str, generated: str, baseline: str) -> None:
+    actual = sql(generated)
+    expected = sql(baseline)
+    if len(actual) != len(expected) or any(len(left) != len(right) for left, right in zip(actual, expected)):
+        raise AssertionError(f"{name} result shape mismatch: expected {expected!r}, actual {actual!r}")
+    for actual_row, expected_row in zip(actual, expected):
+        for actual_value, expected_value in zip(actual_row, expected_row):
+            try:
+                matches = math.isclose(
+                    float(actual_value),
+                    float(expected_value),
+                    rel_tol=1e-12,
+                    abs_tol=1e-6,
+                )
+            except ValueError:
+                matches = actual_value == expected_value
+            if not matches:
+                raise AssertionError(f"{name} mismatch: expected {expected!r}, actual {actual!r}")
     print(f"PASS {name}: {actual!r}")
 
 
@@ -94,7 +116,7 @@ model = {
         *(
             {
                 "name": f"stat_{name.lower()}",
-                "expression": {"sql": f"ROUND({name}(orders.totalprice), 6)"},
+                "expression": {"sql": f"{name}(orders.totalprice)"},
             }
             for name in (
                 "STDDEV",
@@ -151,13 +173,12 @@ statistics = compiler.compile(
     ),
     target="trino",
 )
-assert_same(
+assert_numeric_close(
     "sample and population statistical aggregates",
     statistics.sql,
     """
-    SELECT ROUND(STDDEV_SAMP(totalprice), 6), ROUND(STDDEV_POP(totalprice), 6),
-           ROUND(STDDEV_SAMP(totalprice), 6), ROUND(VAR_SAMP(totalprice), 6),
-           ROUND(VAR_POP(totalprice), 6), ROUND(VAR_SAMP(totalprice), 6)
+    SELECT STDDEV_SAMP(totalprice), STDDEV_POP(totalprice), STDDEV_SAMP(totalprice),
+           VAR_SAMP(totalprice), VAR_POP(totalprice), VAR_SAMP(totalprice)
     FROM tpch.tiny.orders
     """,
 )
