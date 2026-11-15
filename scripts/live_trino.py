@@ -91,6 +91,20 @@ model = {
                 )
             },
         },
+        *(
+            {
+                "name": f"stat_{name.lower()}",
+                "expression": {"sql": f"{name}(orders.totalprice)"},
+            }
+            for name in (
+                "STDDEV",
+                "STDDEV_POP",
+                "STDDEV_SAMP",
+                "VARIANCE",
+                "VAR_POP",
+                "VAR_SAMP",
+            )
+        ),
         {
             "name": "revenue_per_customer",
             "expression": {
@@ -118,6 +132,32 @@ assert_same(
     LEFT JOIN tpch.tiny.customer c ON o.custkey = c.custkey
     GROUP BY c.mktsegment
     ORDER BY c.mktsegment
+    """,
+)
+
+statistics = compiler.compile(
+    Query(
+        metrics=tuple(
+            f"stat_{name.lower()}"
+            for name in (
+                "STDDEV",
+                "STDDEV_POP",
+                "STDDEV_SAMP",
+                "VARIANCE",
+                "VAR_POP",
+                "VAR_SAMP",
+            )
+        )
+    ),
+    target="trino",
+)
+assert_same(
+    "sample and population statistical aggregates",
+    statistics.sql,
+    """
+    SELECT STDDEV_SAMP(totalprice), STDDEV_POP(totalprice), STDDEV_SAMP(totalprice),
+           VAR_SAMP(totalprice), VAR_POP(totalprice), VAR_SAMP(totalprice)
+    FROM tpch.tiny.orders
     """,
 )
 

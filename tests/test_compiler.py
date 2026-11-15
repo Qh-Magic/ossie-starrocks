@@ -460,6 +460,36 @@ class CompilerTests(unittest.TestCase):
             self.assertIn("LOG(10, 100)", sql)
             self.assertIn("LOG10(100)", sql)
 
+    def test_ossie_03_preserves_sample_and_population_statistics(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {
+                "name": name.lower(),
+                "expression": {"sql": f"{name}(orders.amount)"},
+            }
+            for name in (
+                "STDDEV",
+                "STDDEV_POP",
+                "STDDEV_SAMP",
+                "VARIANCE",
+                "VAR_POP",
+                "VAR_SAMP",
+            )
+        ]
+        query = Query(metrics=tuple(metric["name"] for metric in model["metrics"]))
+
+        starrocks = self.compiler(model).compile(query)
+        trino = self.compiler(model).compile(query, target="trino")
+
+        for sql in (starrocks.sql, trino.sql):
+            self.assertIn("STDDEV_SAMP(", sql)
+            self.assertIn("STDDEV_POP(", sql)
+            self.assertIn("VAR_SAMP(", sql)
+            self.assertIn("VAR_POP(", sql)
+            self.assertNotIn("STDDEV(t0", sql)
+            self.assertNotIn("VARIANCE(t0", sql)
+
     def test_ossie_03_compiles_required_conditional_functions(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"

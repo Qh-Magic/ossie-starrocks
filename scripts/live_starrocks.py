@@ -136,6 +136,20 @@ model = {
                 )
             },
         },
+        *(
+            {
+                "name": f"stat_{name.lower()}",
+                "expression": {"sql": f"{name}(orders.amount)"},
+            }
+            for name in (
+                "STDDEV",
+                "STDDEV_POP",
+                "STDDEV_SAMP",
+                "VARIANCE",
+                "VAR_POP",
+                "VAR_SAMP",
+            )
+        ),
         {
             "name": "active_customers",
             "expression": {
@@ -187,6 +201,31 @@ assert_same(
     FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
     GROUP BY o.status, c.country
     ORDER BY o.status, c.country
+    """,
+)
+
+statistics = compiler.compile(
+    Query(
+        metrics=tuple(
+            f"stat_{name.lower()}"
+            for name in (
+                "STDDEV",
+                "STDDEV_POP",
+                "STDDEV_SAMP",
+                "VARIANCE",
+                "VAR_POP",
+                "VAR_SAMP",
+            )
+        )
+    )
+)
+assert_same(
+    "sample and population statistical aggregates",
+    statistics.sql,
+    """
+    SELECT STDDEV_SAMP(amount), STDDEV_POP(amount), STDDEV_SAMP(amount),
+           VAR_SAMP(amount), VAR_POP(amount), VAR_SAMP(amount)
+    FROM orders
     """,
 )
 

@@ -294,7 +294,7 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
         arguments = tuple(_render_expr(arg, aliases) for arg in expression.args)
         if expression.name in SUPPORTED_SCALAR_FUNCTIONS:
             return _render_scalar_call(expression.name, arguments)
-        return f"{expression.name}({distinct}{', '.join(arguments)})"
+        return f"{_render_aggregate_name(expression.name)}({distinct}{', '.join(arguments)})"
     if isinstance(expression, FilteredAggregate):
         aggregate = expression.aggregate
         predicate = _render_expr(expression.predicate, aliases)
@@ -304,7 +304,7 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
         else:
             conditional = f"CASE WHEN {predicate} THEN {_render_expr(argument, aliases)} END"
         distinct = "DISTINCT " if aggregate.distinct else ""
-        return f"{aggregate.name}({distinct}{conditional})"
+        return f"{_render_aggregate_name(aggregate.name)}({distinct}{conditional})"
     if isinstance(expression, MeasureRef):
         return _render_expr(expression.expression, aliases)
     raise AssertionError(expression)
@@ -321,6 +321,12 @@ def _render_scalar_call(name: str, arguments: tuple[str, ...]) -> str:
     elif name == "NULLIFZERO":
         return f"NULLIF({arguments[0]}, 0)"
     return f"{name}({', '.join(arguments)})"
+
+def _render_aggregate_name(name: str) -> str:
+    return {
+        "STDDEV": "STDDEV_SAMP",
+        "VARIANCE": "VAR_SAMP",
+    }.get(name, name)
 
 def _render_filter(item: QueryFilter, aliases: dict[str, str]) -> str:
     if isinstance(item, PlannedExpressionFilter):

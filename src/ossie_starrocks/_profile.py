@@ -1,4 +1,18 @@
-SUPPORTED_AGGREGATES = frozenset({"SUM", "COUNT", "MIN", "MAX", "AVG"})
+SUPPORTED_AGGREGATES = frozenset(
+    {
+        "AVG",
+        "COUNT",
+        "MAX",
+        "MIN",
+        "STDDEV",
+        "STDDEV_POP",
+        "STDDEV_SAMP",
+        "SUM",
+        "VARIANCE",
+        "VAR_POP",
+        "VAR_SAMP",
+    }
+)
 
 # OSSIE_SQL_2026 functions whose syntax and argument order map directly to
 # StarRocks. Values are the accepted argument counts.
