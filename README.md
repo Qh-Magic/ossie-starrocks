@@ -91,7 +91,7 @@ The current release accepts the following model and query features.
 
 The compiler emits deterministic StarRocks SQL with backtick-quoted identifiers and typed literals. It follows safe many-to-one paths with `LEFT JOIN`, as required by the Ossie Layer 3 lowering, so an unmatched home row contributes to the `NULL` dimension group instead of being discarded.
 
-The same proven semantic plan can be rendered as Trino SQL by passing `target="trino"` to `Compiler.compile`, or `--target trino` to the CLI. The Trino target uses double-quoted identifiers and verified dialect rewrites while rejecting functions without a proven lowering. StarRocks remains the default target for backward compatibility.
+The same proven semantic plan can be rendered as Trino SQL by passing `target="trino"` to `Compiler.compile`, or `--target trino` to the CLI. The Trino target uses double-quoted identifiers and verified dialect rewrites, including `LEFT`/`RIGHT` to `SUBSTRING`, while rejecting functions without a proven lowering. StarRocks remains the default target for backward compatibility.
 
 ## Refused constructs
 

@@ -49,6 +49,8 @@ model = {
             "fields": [
                 {"name": "custkey", "expression": {"sql": "custkey"}},
                 {"name": "orderstatus", "expression": {"sql": "orderstatus"}},
+                {"name": "status_left", "expression": {"sql": "LEFT(orderstatus, 1)"}},
+                {"name": "status_right", "expression": {"sql": "RIGHT(orderstatus, 1)"}},
                 {"name": "totalprice", "expression": {"sql": "totalprice"}},
             ],
         },
@@ -100,6 +102,25 @@ assert_same(
     LEFT JOIN tpch.tiny.customer c ON o.custkey = c.custkey
     GROUP BY c.mktsegment
     ORDER BY c.mktsegment
+    """,
+)
+
+string_edges = compiler.compile(
+    Query(
+        metrics=("revenue",),
+        dimensions=("orders.status_left", "orders.status_right"),
+    ),
+    target="trino",
+)
+assert_same(
+    "portable LEFT and RIGHT functions",
+    string_edges.sql + " ORDER BY d0, d1",
+    """
+    SELECT substring(orderstatus, 1, 1), substring(orderstatus, -1),
+           ROUND(SUM(totalprice), 2)
+    FROM tpch.tiny.orders
+    GROUP BY substring(orderstatus, 1, 1), substring(orderstatus, -1)
+    ORDER BY 1, 2
     """,
 )
 

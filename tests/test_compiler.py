@@ -567,20 +567,31 @@ class CompilerTests(unittest.TestCase):
 
         self.assertEqual("INVALID_TARGET", caught.exception.code)
 
-    def test_trino_target_rejects_unverified_function(self):
+    def test_trino_target_lowers_string_edge_functions(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"
-        model["datasets"][0]["fields"].append(
-            {"name": "status_prefix", "expression": {"sql": "LEFT(status, 1)"}}
+        model["datasets"][0]["fields"].extend(
+            [
+                {"name": "status_prefix", "expression": {"sql": "LEFT(status, 2)"}},
+                {
+                    "name": "status_suffix",
+                    "expression": {"sql": "RIGHT(UPPER(status), 3)"},
+                },
+            ]
         )
 
-        with self.assertRaises(CompilationError) as caught:
-            self.compiler(model).compile(
-                Query(metrics=("revenue",), dimensions=("orders.status_prefix",)),
-                target="trino",
-            )
+        result = self.compiler(model).compile(
+            Query(
+                metrics=("revenue",),
+                dimensions=("orders.status_prefix", "orders.status_suffix"),
+            ),
+            target="trino",
+        )
 
-        self.assertEqual("UNSUPPORTED_TRINO_FUNCTION", caught.exception.code)
+        self.assertIn('SUBSTRING(t0."status", 1, 2)', result.sql)
+        self.assertIn('SUBSTRING(UPPER(t0."status"), -(3))', result.sql)
+        self.assertNotIn("LEFT(", result.sql)
+        self.assertNotIn("RIGHT(", result.sql)
 
     def test_ossie_03_validates_conditional_function_arity(self):
         model = sales_model()
