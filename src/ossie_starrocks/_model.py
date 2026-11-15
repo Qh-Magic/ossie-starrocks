@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from ._expressions import Binary, Call, Column, Expr, ExpressionError, Star, contains_call, parse, walk
-from ._profile import SUPPORTED_AGGREGATES
+from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 
 
 class ModelError(ValueError):
@@ -139,6 +139,7 @@ def bind_model(raw: dict[str, Any]) -> BoundModel:
                 raise ModelError("INVALID_FIELD_EXPRESSION", field_location, "field expression cannot aggregate")
             if any(isinstance(node, Star) for node in walk(expression)):
                 raise ModelError("INVALID_FIELD_EXPRESSION", field_location, "field expression cannot contain *")
+            _validate_scalar_calls(expression, field_location)
             expression = _scope_expression(expression, dataset_name, dataset_names | {dataset_name})
             for node in walk(expression):
                 if isinstance(node, Column) and node.dataset != dataset_name:
@@ -235,20 +236,25 @@ def _bind_metric(raw: dict[str, Any], location: str, declared_root: str | None, 
 def _validate_aggregate_shape(expression: Expr, location: str) -> None:
     def visit(node: Expr, inside_aggregate: bool) -> None:
         if isinstance(node, Call):
-            if node.name not in SUPPORTED_AGGREGATES:
+            if node.name in SUPPORTED_AGGREGATES:
+                if inside_aggregate:
+                    raise ModelError("INVALID_METRIC_EXPRESSION", location, "nested aggregate")
+                if len(node.args) != 1:
+                    raise ModelError("INVALID_METRIC_EXPRESSION", location, f"{node.name} expects one argument")
+                for argument in node.args:
+                    if isinstance(argument, Star):
+                        if node.name != "COUNT":
+                            raise ModelError("INVALID_METRIC_EXPRESSION", location, "only COUNT may use *")
+                    else:
+                        if any(isinstance(child, Star) for child in walk(argument)):
+                            raise ModelError("INVALID_METRIC_EXPRESSION", location, "* must be the direct argument of COUNT")
+                        visit(argument, True)
+            elif node.name in SUPPORTED_SCALAR_FUNCTIONS:
+                _validate_call_arity(node, location)
+                for argument in node.args:
+                    visit(argument, inside_aggregate)
+            else:
                 raise ModelError("UNSUPPORTED_EXPRESSION", location, f"unsupported function {node.name}")
-            if inside_aggregate:
-                raise ModelError("INVALID_METRIC_EXPRESSION", location, "nested aggregate")
-            if len(node.args) != 1:
-                raise ModelError("INVALID_METRIC_EXPRESSION", location, f"{node.name} expects one argument")
-            for argument in node.args:
-                if isinstance(argument, Star):
-                    if node.name != "COUNT":
-                        raise ModelError("INVALID_METRIC_EXPRESSION", location, "only COUNT may use *")
-                else:
-                    if any(isinstance(child, Star) for child in walk(argument)):
-                        raise ModelError("INVALID_METRIC_EXPRESSION", location, "* must be the direct argument of COUNT")
-                    visit(argument, True)
         elif isinstance(node, Column) and not inside_aggregate:
             raise ModelError("INVALID_METRIC_EXPRESSION", location, "ungrouped field outside aggregate")
         elif isinstance(node, Star):
@@ -258,6 +264,21 @@ def _validate_aggregate_shape(expression: Expr, location: str) -> None:
             visit(node.right, inside_aggregate)  # type: ignore[attr-defined]
 
     visit(expression, False)
+
+
+def _validate_scalar_calls(expression: Expr, location: str) -> None:
+    for node in walk(expression):
+        if isinstance(node, Call):
+            if node.name not in SUPPORTED_SCALAR_FUNCTIONS:
+                raise ModelError("UNSUPPORTED_EXPRESSION", location, f"unsupported function {node.name}")
+            _validate_call_arity(node, location)
+
+
+def _validate_call_arity(call: Call, location: str) -> None:
+    accepted = SUPPORTED_SCALAR_FUNCTIONS[call.name]
+    if len(call.args) not in accepted:
+        expected = " or ".join(str(value) for value in sorted(accepted))
+        raise ModelError("INVALID_EXPRESSION_ARITY", location, f"{call.name} expects {expected} argument(s)")
 
 
 def _expand_fields(fields: list[Field], field_by_name: Mapping[str, Field]) -> tuple[list[Field], dict[str, Field]]:

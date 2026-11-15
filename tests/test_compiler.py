@@ -254,6 +254,44 @@ class CompilerTests(unittest.TestCase):
 
         self.assert_error("UNKNOWN_FIELD", model)
 
+    def test_ossie_03_lowers_direct_scalar_functions_to_starrocks(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].extend(
+            [
+                {"name": "normalized_status", "expression": {"sql": "UPPER(TRIM(raw_status))"}},
+                {"name": "order_month", "expression": {"sql": "DATE_TRUNC('month', ordered_at)"}},
+            ]
+        )
+        model["metrics"][0]["expression"] = {"sql": "SUM(ABS(orders.amount))"}
+
+        result = self.compile(
+            model,
+            Query(metrics=("revenue",), dimensions=("orders.normalized_status", "orders.order_month")),
+        )
+
+        self.assertIn("UPPER(TRIM(t0.`raw_status`))", result.sql)
+        self.assertIn("DATE_TRUNC('month', t0.`ordered_at`)", result.sql)
+        self.assertIn("SUM(ABS(t0.`amount`))", result.sql)
+
+    def test_rejects_wrong_scalar_function_arity(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].append(
+            {"name": "bad_status", "expression": {"sql": "UPPER(status, status)"}}
+        )
+
+        self.assert_error("INVALID_EXPRESSION_ARITY", model)
+
+    def test_rejects_unmapped_ossie_function(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].append(
+            {"name": "formatted", "expression": {"sql": "TO_CHAR(ordered_at, 'YYYY')"}}
+        )
+
+        self.assert_error("UNSUPPORTED_EXPRESSION", model)
+
 
 if __name__ == "__main__":
     unittest.main()

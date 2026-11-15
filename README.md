@@ -74,6 +74,7 @@ The current release accepts the following model and query features.
 - Dataset fields with `ANSI_SQL`, `OSSIE_SQL_2026`, or 0.3 `expression.sql` expressions.
 - Root-level metrics and dataset-scoped metrics.
 - `SUM`, `COUNT`, `MIN`, `MAX`, and `AVG` aggregates.
+- Direct StarRocks lowering for a verified OSSIE SQL scalar subset: case/trim/length and substring functions, basic numeric functions, date-part extraction, and `DATE_TRUNC`.
 - Arithmetic above aggregate expressions.
 - Relationships whose target columns match a declared primary key or unique key.
 - Queries with one metric grain, dimensions, field filters, metric filters, and a limit.

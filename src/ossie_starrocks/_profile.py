@@ -1,1 +1,31 @@
 SUPPORTED_AGGREGATES = frozenset({"SUM", "COUNT", "MIN", "MAX", "AVG"})
+
+# OSSIE_SQL_2026 functions whose syntax and argument order map directly to
+# StarRocks. Values are the accepted argument counts.
+SUPPORTED_SCALAR_FUNCTIONS = {
+    "ABS": frozenset({1}),
+    "CEIL": frozenset({1}),
+    "CEILING": frozenset({1}),
+    "DAY": frozenset({1}),
+    "DAYOFYEAR": frozenset({1}),
+    "FLOOR": frozenset({1}),
+    "HOUR": frozenset({1}),
+    "LEFT": frozenset({2}),
+    "LENGTH": frozenset({1}),
+    "LOWER": frozenset({1}),
+    "LTRIM": frozenset({1}),
+    "MINUTE": frozenset({1}),
+    "MONTH": frozenset({1}),
+    "QUARTER": frozenset({1}),
+    "REPLACE": frozenset({3}),
+    "RIGHT": frozenset({2}),
+    "ROUND": frozenset({1, 2}),
+    "RTRIM": frozenset({1}),
+    "SECOND": frozenset({1}),
+    "SQRT": frozenset({1}),
+    "SUBSTRING": frozenset({2, 3}),
+    "TRIM": frozenset({1}),
+    "UPPER": frozenset({1}),
+    "YEAR": frozenset({1}),
+    "DATE_TRUNC": frozenset({2}),
+}

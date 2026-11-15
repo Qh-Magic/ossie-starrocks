@@ -6,7 +6,7 @@ from typing import Any
 
 from ._expressions import Binary, Call, Column, Expr, Literal as ExprLiteral, Star
 from ._model import BoundModel
-from ._profile import SUPPORTED_AGGREGATES
+from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 from .api import CompilationError, CompiledQuery, OutputColumn
 from .planning import PlannedFilter, QueryPlan
 
@@ -54,7 +54,7 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
     if isinstance(expression, Binary):
         return f"({_render_expr(expression.left, aliases)} {expression.op} {_render_expr(expression.right, aliases)})"
     if isinstance(expression, Call):
-        if expression.name not in SUPPORTED_AGGREGATES:
+        if expression.name not in SUPPORTED_AGGREGATES and expression.name not in SUPPORTED_SCALAR_FUNCTIONS:
             raise CompilationError("UNSUPPORTED_EXPRESSION", "$.expression", f"unsupported function {expression.name}")
         return f"{expression.name}({', '.join(_render_expr(arg, aliases) for arg in expression.args)})"
     raise AssertionError(expression)
