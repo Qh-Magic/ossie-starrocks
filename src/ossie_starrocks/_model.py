@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from ._expressions import Binary, Call, Column, Expr, ExpressionError, Star, contains_call, parse, walk
-from ._starrocks import SUPPORTED_AGGREGATES
+from ._profile import SUPPORTED_AGGREGATES
 
 
 class ModelError(ValueError):
