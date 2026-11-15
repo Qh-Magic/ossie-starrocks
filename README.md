@@ -1,10 +1,10 @@
-# Ossie StarRocks compiler
+# Ossie semantic compiler for StarRocks and Trino
 
-`ossie-starrocks` compiles Apache Ossie semantic requests into StarRocks `SELECT` statements. It does not load DuckDB or a DuckDB extension.
+`ossie-starrocks` compiles Apache Ossie semantic requests into StarRocks or Trino `SELECT` statements. It does not load DuckDB or a DuckDB extension.
 
 The compiler fails closed. It returns no SQL when a request has mixed metric grains, a fan-out join, more than one valid join path, an unknown reference, or an expression outside the supported profile.
 
-This project is an early implementation. The supported profile below passes the automated behavior suite and a live StarRocks 3.5 differential workflow, but it has not completed full Apache Ossie conformance testing.
+This project is an early implementation. The supported profile below passes the automated behavior suite and live StarRocks 3.5 and Trino differential workflows, but it has not completed full Apache Ossie conformance testing.
 
 ## Install the package
 
@@ -30,7 +30,7 @@ result = compiler.compile(Query(
     metrics=("revenue",),
     dimensions=("customers.country",),
     filter="orders.status = 'paid' OR orders.status = 'settled'",
-))
+), target="trino")  # omit target to emit StarRocks SQL
 
 print(result.sql)
 ```
@@ -41,6 +41,8 @@ You can run the same operation through the command-line interface.
 
 ```sh
 ossie-starrocks compile --model sales.json --request request.json
+# Trino SQL:
+ossie-starrocks compile --model sales.json --request request.json --target trino
 ```
 
 The request file uses this shape.
@@ -89,6 +91,8 @@ The current release accepts the following model and query features.
 
 The compiler emits deterministic StarRocks SQL with backtick-quoted identifiers and typed literals. It follows safe many-to-one paths with `LEFT JOIN`, as required by the Ossie Layer 3 lowering, so an unmatched home row contributes to the `NULL` dimension group instead of being discarded.
 
+The same proven semantic plan can be rendered as Trino SQL by passing `target="trino"` to `Compiler.compile`, or `--target trino` to the CLI. The Trino target uses double-quoted identifiers and verified dialect rewrites while rejecting functions without a proven lowering. StarRocks remains the default target for backward compatibility.
+
 ## Refused constructs
 
 The compiler rejects these constructs instead of guessing their semantics.
@@ -112,6 +116,8 @@ Static compilation trusts the model's key declarations. It cannot prove that Sta
 The script compiles the package and runs the library and CLI behavior tests. Live execution remains a separate workflow because it requires Docker and a running StarRocks container.
 
 The manually triggered `live-starrocks` GitHub workflow starts the official `starrocks/allin1-ubuntu:3.5-latest` image, loads deterministic fixture data, and compares generated queries with hand-written StarRocks baseline queries. Its source is [`scripts/live_starrocks.py`](scripts/live_starrocks.py).
+
+The manually triggered `live-trino` workflow runs generated and hand-written baseline queries against the official `trinodb/trino:476` image and its TPCH connector. Its source is [`scripts/live_trino.py`](scripts/live_trino.py).
 
 Research on using the same semantic model through Trino is available in [`docs/research/trino-ossie.md`](docs/research/trino-ossie.md). The recommended route is an external Ossie semantic compiler that emits Trino SQL; neither Apache Ossie nor Trino currently ships a direct Ossie runtime integration.
 

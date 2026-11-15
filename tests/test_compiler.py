@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from datetime import datetime
 
 from ossie_starrocks import (
     CompilationError,
@@ -15,8 +16,11 @@ from tests.fixtures import clone, field, metric, sales_model
 
 
 class CompilerTests(unittest.TestCase):
+    def compiler(self, model: dict) -> Compiler:
+        return Compiler.from_text(json.dumps(model), format="json")
+
     def compile(self, model: dict, query: Query):
-        return Compiler.from_text(json.dumps(model), format="json").compile(query)
+        return self.compiler(model).compile(query)
 
     def assert_error(self, code: str, model: dict, query: Query | None = None):
         with self.assertRaises(CompilationError) as caught:
@@ -478,6 +482,100 @@ class CompilerTests(unittest.TestCase):
         self.assertIn("NULLIF(CASE WHEN s1.`present` IS NULL", result.sql)
         self.assertNotIn("NVL(", result.sql)
         self.assertNotIn("NULLIFZERO(", result.sql)
+
+    def test_compiles_the_same_semantic_plan_for_trino(self):
+        model = sales_model()
+
+        result = self.compiler(model).compile(
+            Query(
+                metrics=("revenue",),
+                dimensions=("customers.country",),
+                where=(FieldFilter("orders.status", "eq", "complete"),),
+            ),
+            target="trino",
+        )
+
+        self.assertIn('SUM(t0."amount") AS "m0"', result.sql)
+        self.assertIn(
+            'LEFT JOIN "default_catalog"."sales"."customers" AS t1',
+            result.sql,
+        )
+        self.assertIn('WHERE t0."status" = \'complete\'', result.sql)
+        self.assertNotIn("`", result.sql)
+
+    def test_trino_target_lowers_cross_dataset_conditional_metric(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {
+                "name": "safe_ratio",
+                "expression": {
+                    "sql": "NVL(SUM(orders.amount), 0) / NULLIFZERO(COUNT(customers.customer_id))"
+                },
+            }
+        ]
+
+        result = self.compiler(model).compile(
+            Query(metrics=("safe_ratio",), dimensions=("customers.country",)),
+            target="trino",
+        )
+
+        self.assertIn('COALESCE(CASE WHEN s0."present" IS NULL', result.sql)
+        self.assertIn('FULL OUTER JOIN s1', result.sql)
+        self.assertNotIn("IFNULL", result.sql)
+        self.assertNotIn("`", result.sql)
+
+    def test_trino_target_uses_timestamp_type(self):
+        model = sales_model()
+        model["datasets"][0]["fields"].append(field("ordered_at", "ordered_at"))
+
+        result = self.compiler(model).compile(
+            Query(
+                metrics=("revenue",),
+                where=(FieldFilter("orders.ordered_at", "ge", datetime(2026, 1, 1, 12, 30)),),
+            ),
+            target="trino",
+        )
+
+        self.assertIn("CAST('2026-01-01 12:30:00' AS TIMESTAMP)", result.sql)
+        self.assertNotIn("DATETIME", result.sql)
+
+    def test_trino_target_does_not_rewrite_string_literals(self):
+        model = sales_model()
+
+        result = self.compiler(model).compile(
+            Query(
+                metrics=("revenue",),
+                where=(FieldFilter("orders.status", "eq", "IFNULL DATETIME `literal`"),),
+            ),
+            target="trino",
+        )
+
+        self.assertIn("'IFNULL DATETIME `literal`'", result.sql)
+
+    def test_rejects_unknown_sql_target(self):
+        with self.assertRaises(CompilationError) as caught:
+            self.compiler(sales_model()).compile(
+                Query(metrics=("revenue",)),
+                target="duckdb",  # type: ignore[arg-type]
+            )
+
+        self.assertEqual("INVALID_TARGET", caught.exception.code)
+
+    def test_trino_target_rejects_unverified_function(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].append(
+            {"name": "status_prefix", "expression": {"sql": "LEFT(status, 1)"}}
+        )
+
+        with self.assertRaises(CompilationError) as caught:
+            self.compiler(model).compile(
+                Query(metrics=("revenue",), dimensions=("orders.status_prefix",)),
+                target="trino",
+            )
+
+        self.assertEqual("UNSUPPORTED_TRINO_FUNCTION", caught.exception.code)
 
     def test_ossie_03_validates_conditional_function_arity(self):
         model = sales_model()

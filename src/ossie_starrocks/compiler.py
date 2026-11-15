@@ -5,6 +5,7 @@ from typing import Literal
 
 from ._model import BoundModel, ModelError, load_document
 from ._starrocks import render_query
+from ._trino import render_query as render_trino_query
 from .api import CompilationError, CompiledQuery, FieldFilter, MetricFilter, OutputColumn, Query
 from .planning import plan_query
 
@@ -25,7 +26,17 @@ class Compiler:
         except ModelError as error:
             raise CompilationError(error.code, error.location, str(error)) from error
 
-    def compile(self, query: Query) -> CompiledQuery:
-        return render_query(self._model, plan_query(self._model, query))
+    def compile(
+        self,
+        query: Query,
+        *,
+        target: Literal["starrocks", "trino"] = "starrocks",
+    ) -> CompiledQuery:
+        plan = plan_query(self._model, query)
+        if target == "starrocks":
+            return render_query(self._model, plan)
+        if target == "trino":
+            return render_trino_query(self._model, plan)
+        raise CompilationError("INVALID_TARGET", "$.target", f"unsupported SQL target {target!r}")
 
 __all__ = ["CompilationError", "CompiledQuery", "Compiler", "FieldFilter", "MetricFilter", "OutputColumn", "Query"]

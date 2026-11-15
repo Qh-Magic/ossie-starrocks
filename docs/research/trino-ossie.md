@@ -26,6 +26,16 @@ Trino
 Iceberg／Hive／PostgreSQL／MySQL／其他資料來源
 ```
 
+### 本專案的落地狀態
+
+本儲存庫已依上述架構加入第一版 Trino target。它和 StarRocks target 共用同一套 Ossie 模型驗證、relationship graph、grain planner 與 Layer 3 filter placement，再將已證明安全的 query plan 輸出成普通 Trino SQL：
+
+```python
+result = compiler.compile(query, target="trino")
+```
+
+CLI 對應為 `ossie-starrocks compile ... --target trino`。GitHub 的 `live-trino` workflow 會在官方 Trino 容器內，把產生的 SQL 和手寫 baseline SQL 對同一份 TPCH 資料執行並比較結果。這是外部 semantic compiler PoC，不代表 Trino 已原生支援 Ossie，也不會改變下文對官方整合狀態的判斷。
+
 理由如下：
 
 - Ossie 是交換語意模型的 JSON/YAML 規格，不是查詢引擎。官方 README 將它定位為跨 AI、BI 與分析工具交換語意模型的 vendor-neutral specification。[Apache Ossie README](https://github.com/apache/ossie/blob/main/README.md)

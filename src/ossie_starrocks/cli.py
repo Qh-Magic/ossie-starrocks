@@ -14,6 +14,7 @@ def _parser() -> argparse.ArgumentParser:
     compile_parser = commands.add_parser("compile")
     compile_parser.add_argument("--model", required=True)
     compile_parser.add_argument("--request", required=True)
+    compile_parser.add_argument("--target", choices=("starrocks", "trino"), default="starrocks")
     return parser
 
 
@@ -31,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
             having=tuple(_metric_filter(item, index) for index, item in enumerate(_objects(request.get("having", []), "$.having"))),
             limit=request.get("limit"),
         )
-        result = Compiler.from_file(arguments.model).compile(query)
+        result = Compiler.from_file(arguments.model).compile(query, target=arguments.target)
     except (CompilationError, OSError, json.JSONDecodeError) as error:
         if isinstance(error, CompilationError):
             print(json.dumps({"code": error.code, "location": error.location, "message": error.message}), file=sys.stderr)

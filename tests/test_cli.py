@@ -137,6 +137,40 @@ class CliTests(unittest.TestCase):
         self.assertIn("WHERE ((t0.`status` = 'complete') OR (t0.`status` = 'pending'))", completed.stdout)
         self.assertEqual("", completed.stderr)
 
+    def test_cli_emits_trino_sql(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_path = root / "model.json"
+            request_path = root / "request.json"
+            model_path.write_text(json.dumps(sales_model()), encoding="utf-8")
+            request_path.write_text(
+                json.dumps({"metrics": ["revenue"], "dimensions": ["customers.country"]}),
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ossie_starrocks.cli",
+                    "compile",
+                    "--model",
+                    str(model_path),
+                    "--request",
+                    str(request_path),
+                    "--target",
+                    "trino",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertIn('LEFT JOIN "default_catalog"."sales"."customers"', completed.stdout)
+        self.assertNotIn("`", completed.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
