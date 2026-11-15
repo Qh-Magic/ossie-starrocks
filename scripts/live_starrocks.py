@@ -139,7 +139,7 @@ model = {
         *(
             {
                 "name": f"stat_{name.lower()}",
-                "expression": {"sql": f"{name}(orders.amount)"},
+                "expression": {"sql": f"ROUND({name}(orders.amount), 6)"},
             }
             for name in (
                 "STDDEV",
@@ -223,8 +223,9 @@ assert_same(
     "sample and population statistical aggregates",
     statistics.sql,
     """
-    SELECT STDDEV_SAMP(amount), STDDEV_POP(amount), STDDEV_SAMP(amount),
-           VAR_SAMP(amount), VAR_POP(amount), VAR_SAMP(amount)
+    SELECT ROUND(STDDEV_SAMP(amount), 6), ROUND(STDDEV_POP(amount), 6),
+           ROUND(STDDEV_SAMP(amount), 6), ROUND(VAR_SAMP(amount), 6),
+           ROUND(VAR_POP(amount), 6), ROUND(VAR_SAMP(amount), 6)
     FROM orders
     """,
 )

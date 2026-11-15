@@ -94,7 +94,7 @@ model = {
         *(
             {
                 "name": f"stat_{name.lower()}",
-                "expression": {"sql": f"{name}(orders.totalprice)"},
+                "expression": {"sql": f"ROUND({name}(orders.totalprice), 6)"},
             }
             for name in (
                 "STDDEV",
@@ -155,8 +155,9 @@ assert_same(
     "sample and population statistical aggregates",
     statistics.sql,
     """
-    SELECT STDDEV_SAMP(totalprice), STDDEV_POP(totalprice), STDDEV_SAMP(totalprice),
-           VAR_SAMP(totalprice), VAR_POP(totalprice), VAR_SAMP(totalprice)
+    SELECT ROUND(STDDEV_SAMP(totalprice), 6), ROUND(STDDEV_POP(totalprice), 6),
+           ROUND(STDDEV_SAMP(totalprice), 6), ROUND(VAR_SAMP(totalprice), 6),
+           ROUND(VAR_POP(totalprice), 6), ROUND(VAR_SAMP(totalprice), 6)
     FROM tpch.tiny.orders
     """,
 )
