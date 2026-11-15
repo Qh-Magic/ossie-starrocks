@@ -369,6 +369,37 @@ class CompilerTests(unittest.TestCase):
         self.assertIn("DATE_TRUNC('month', t0.`ordered_at`)", result.sql)
         self.assertIn("SUM(ABS(t0.`amount`))", result.sql)
 
+    def test_ossie_03_compiles_required_conditional_functions(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {
+                "name": "safe_average",
+                "expression": {
+                    "sql": "COALESCE(SUM(orders.amount) / NULLIF(COUNT(orders.customer_id), 0), 0)"
+                },
+            }
+        ]
+
+        result = self.compile(model, Query(metrics=("safe_average",)))
+
+        self.assertIn(
+            "COALESCE((SUM(t0.`amount`) / NULLIF(COUNT(t0.`customer_id`), 0)), 0)",
+            result.sql,
+        )
+
+    def test_ossie_03_validates_conditional_function_arity(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {
+                "name": "invalid",
+                "expression": {"sql": "COALESCE(SUM(orders.amount))"},
+            }
+        ]
+
+        self.assert_error("INVALID_EXPRESSION_ARITY", model)
+
     def test_rejects_wrong_scalar_function_arity(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"

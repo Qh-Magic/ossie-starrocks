@@ -138,6 +138,12 @@ model = {
                 "sql": "SUM(orders.amount) / COUNT(customers.customer_id)"
             },
         },
+        {
+            "name": "safe_revenue_per_customer",
+            "expression": {
+                "sql": "COALESCE(SUM(orders.amount), 0) / NULLIF(COUNT(customers.customer_id), 0)"
+            },
+        },
     ],
 }
 
@@ -220,6 +226,41 @@ assert_same(
     SELECT COALESCE(order_stage.country, customer_stage.country),
            (CASE WHEN order_stage.present IS NULL THEN NULL ELSE order_stage.value END) /
            (CASE WHEN customer_stage.present IS NULL THEN 0 ELSE customer_stage.value END)
+    FROM order_stage
+    FULL OUTER JOIN customer_stage
+      ON order_stage.country = customer_stage.country
+         OR (order_stage.country IS NULL AND customer_stage.country IS NULL)
+    ORDER BY COALESCE(order_stage.country, customer_stage.country)
+    """,
+)
+
+conditional_component_metric = compiler.compile(
+    Query(
+        metrics=("safe_revenue_per_customer",),
+        dimensions=("customers.country",),
+    )
+)
+assert_same(
+    "required conditional functions across components",
+    conditional_component_metric.sql + " ORDER BY d0",
+    """
+    WITH order_stage AS (
+        SELECT c.country, SUM(o.amount) AS value, 1 AS present
+        FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
+        GROUP BY c.country
+    ), customer_stage AS (
+        SELECT country, COUNT(customer_id) AS value, 1 AS present
+        FROM customers
+        GROUP BY country
+    )
+    SELECT COALESCE(order_stage.country, customer_stage.country),
+           COALESCE(
+             CASE WHEN order_stage.present IS NULL THEN NULL ELSE order_stage.value END,
+             0
+           ) / NULLIF(
+             CASE WHEN customer_stage.present IS NULL THEN 0 ELSE customer_stage.value END,
+             0
+           )
     FROM order_stage
     FULL OUTER JOIN customer_stage
       ON order_stage.country = customer_stage.country
