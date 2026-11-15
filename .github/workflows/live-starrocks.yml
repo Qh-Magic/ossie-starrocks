@@ -21,7 +21,7 @@ jobs:
       - name: Wait for StarRocks
         run: |
           for attempt in $(seq 1 60); do
-            if docker exec ossie-starrocks-live mysql -h 127.0.0.1 -P 9030 -u root -e 'SELECT 1' >/dev/null 2>&1; then
+            if docker exec ossie-starrocks-live mysql -h 127.0.0.1 -P 9030 -u root --batch --skip-column-names -e 'SHOW BACKENDS' 2>/dev/null | grep -q $'\ttrue\t'; then
               exit 0
             fi
             sleep 5
