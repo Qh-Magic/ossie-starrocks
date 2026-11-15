@@ -72,11 +72,14 @@ model = {
         }
     ],
     "metrics": [
-        {"name": "revenue", "expression": {"sql": "SUM(orders.totalprice)"}},
+        {"name": "revenue", "expression": {"sql": "ROUND(SUM(orders.totalprice), 2)"}},
         {
             "name": "revenue_per_customer",
             "expression": {
-                "sql": "NVL(SUM(orders.totalprice), 0) / NULLIFZERO(COUNT(customers.custkey))"
+                "sql": (
+                    "ROUND(NVL(SUM(orders.totalprice), 0) / "
+                    "NULLIFZERO(COUNT(customers.custkey)), 6)"
+                )
             },
         },
     ],
@@ -92,7 +95,7 @@ assert_same(
     "joined aggregate",
     joined.sql + " ORDER BY d0",
     """
-    SELECT c.mktsegment, SUM(o.totalprice)
+    SELECT c.mktsegment, ROUND(SUM(o.totalprice), 2)
     FROM tpch.tiny.orders o
     LEFT JOIN tpch.tiny.customer c ON o.custkey = c.custkey
     GROUP BY c.mktsegment
@@ -119,12 +122,15 @@ assert_same(
         GROUP BY mktsegment
     )
     SELECT COALESCE(order_stage.mktsegment, customer_stage.mktsegment),
-           COALESCE(
-               CASE WHEN order_stage.present IS NULL THEN NULL ELSE order_stage.value END,
-               0
-           ) / NULLIF(
-               CASE WHEN customer_stage.present IS NULL THEN 0 ELSE customer_stage.value END,
-               0
+           ROUND(
+               COALESCE(
+                   CASE WHEN order_stage.present IS NULL THEN NULL ELSE order_stage.value END,
+                   0
+               ) / NULLIF(
+                   CASE WHEN customer_stage.present IS NULL THEN 0 ELSE customer_stage.value END,
+                   0
+               ),
+               6
            )
     FROM order_stage
     FULL OUTER JOIN customer_stage
@@ -145,7 +151,7 @@ assert_same(
     "bound Layer 3 filter",
     filtered.sql + " ORDER BY d0",
     """
-    SELECT c.mktsegment, SUM(o.totalprice)
+    SELECT c.mktsegment, ROUND(SUM(o.totalprice), 2)
     FROM tpch.tiny.orders o
     LEFT JOIN tpch.tiny.customer c ON o.custkey = c.custkey
     WHERE o.orderstatus = 'F'
