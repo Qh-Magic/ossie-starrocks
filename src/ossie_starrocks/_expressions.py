@@ -86,7 +86,14 @@ class FilteredAggregate:
     predicate: "Expr"
 
 
-Expr = Column | Literal | Star | Binary | Unary | IsNull | Case | Between | InList | Like | Call | FilteredAggregate
+@dataclass(frozen=True)
+class MeasureRef:
+    dataset: str
+    metric: str
+    expression: "Expr"
+
+
+Expr = Column | Literal | Star | Binary | Unary | IsNull | Case | Between | InList | Like | Call | FilteredAggregate | MeasureRef
 
 
 _TOKEN = re.compile(
@@ -339,3 +346,5 @@ def walk(expression: Expr) -> Iterable[Expr]:
     elif isinstance(expression, FilteredAggregate):
         yield from walk(expression.aggregate)
         yield from walk(expression.predicate)
+    elif isinstance(expression, MeasureRef):
+        yield from walk(expression.expression)

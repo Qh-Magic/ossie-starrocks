@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ._expressions import Between, Binary, Call, Case, Column, Expr, FilteredAggregate, InList, IsNull, Like, Literal, MeasureRef, Star, Unary
 from ._model import BoundModel, Field, Metric, Relationship
+from ._profile import SUPPORTED_AGGREGATES
 from .api import CompilationError, Query, Scalar
 
 @dataclass(frozen=True)
@@ -24,23 +26,48 @@ class QueryPlan:
     having: tuple[PlannedFilter, ...]
     limit: int | None
 
-def plan_query(model: BoundModel, query: Query) -> QueryPlan:
+@dataclass(frozen=True)
+class MultiStageQueryPlan:
+    metrics: tuple[Metric, ...]
+    stages: tuple[MeasureRef, ...]
+    limit: int | None
+
+def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPlan:
     if not isinstance(query, Query):
         raise CompilationError("INVALID_REQUEST", "$", "query must be a Query")
     if not query.metrics:
         raise CompilationError("EMPTY_METRICS", "$.metrics", "at least one metric is required")
     metrics = tuple(_metric(model, name, f"$.metrics[{i}]") for i, name in enumerate(query.metrics))
+    multistage = any(len(metric.roots) > 1 for metric in metrics)
     roots = {metric.root for metric in metrics}
     having_pairs = tuple((_metric(model, item.metric, f"$.having[{i}].metric"), item) for i, item in enumerate(query.having))
+    multistage = multistage or any(len(metric.roots) > 1 for metric, _ in having_pairs)
     roots.update(metric.root for metric, _ in having_pairs)
-    if len(roots) != 1:
+    if not multistage and len(roots) != 1:
         raise CompilationError("MIXED_GRAIN", "$.metrics", "all selected and HAVING metrics must share one grain", tuple(sorted(roots)))
-    root = next(iter(roots))
     dimensions = tuple(_field(model, name, f"$.dimensions[{i}]") for i, name in enumerate(query.dimensions))
     where_pairs = tuple((_field(model, item.field, f"$.where[{i}].field"), item) for i, item in enumerate(query.where))
     _validate_filters(query)
     if query.limit is not None and (type(query.limit) is not int or not 0 <= query.limit <= 2_147_483_647):
         raise CompilationError("INVALID_LIMIT", "$.limit", "limit must be a non-negative integer")
+    if multistage:
+        if dimensions or where_pairs or having_pairs:
+            raise CompilationError(
+                "MULTISTAGE_UNSUPPORTED_SHAPE",
+                "$",
+                "cross-grain metrics currently require a global query without dimensions, WHERE, or HAVING",
+            )
+        stages: list[MeasureRef] = []
+        seen_stages: set[tuple[str, str]] = set()
+        for metric in metrics:
+            for reference in _multistage_refs(metric.expression):
+                key = (reference.dataset, reference.metric)
+                if key not in seen_stages:
+                    stages.append(reference)
+                    seen_stages.add(key)
+        return MultiStageQueryPlan(metrics, tuple(stages), query.limit)
+    root = next(iter(roots))
+    assert root is not None
     required = {root, *(field.dataset for field in dimensions), *(field.dataset for field, _ in where_pairs)}
     edges: list[Relationship] = []
     seen: set[str] = set()
@@ -52,6 +79,45 @@ def plan_query(model: BoundModel, query: Query) -> QueryPlan:
     return QueryPlan(SafeJoinTree(root, tuple(edges)), metrics, dimensions,
                      tuple(PlannedFilter(field, item.op, item.value) for field, item in where_pairs),
                      tuple(PlannedFilter(metric, item.op, item.value) for metric, item in having_pairs), query.limit)
+
+def _multistage_refs(expression: Expr) -> tuple[MeasureRef, ...]:
+    found: list[MeasureRef] = []
+
+    def visit(node: Expr) -> None:
+        if isinstance(node, MeasureRef):
+            found.append(node)
+            return
+        if isinstance(node, (Column, Star, FilteredAggregate)):
+            raise CompilationError("MULTISTAGE_UNSUPPORTED_EXPRESSION", "$.metrics", "cross-grain expression must be composed from AGG(dataset.metric) values")
+        if isinstance(node, Binary):
+            visit(node.left); visit(node.right)
+        elif isinstance(node, (Unary, IsNull)):
+            visit(node.operand)
+        elif isinstance(node, Case):
+            for condition, value in node.branches:
+                visit(condition); visit(value)
+            if node.otherwise is not None:
+                visit(node.otherwise)
+        elif isinstance(node, Between):
+            visit(node.operand); visit(node.lower); visit(node.upper)
+        elif isinstance(node, InList):
+            visit(node.operand)
+            for value in node.values:
+                visit(value)
+        elif isinstance(node, Like):
+            visit(node.operand); visit(node.pattern)
+        elif isinstance(node, Call):
+            if node.name in SUPPORTED_AGGREGATES:
+                raise CompilationError("MULTISTAGE_UNSUPPORTED_EXPRESSION", "$.metrics", "raw aggregates cannot be mixed with cross-grain AGG values")
+            for argument in node.args:
+                visit(argument)
+        elif not isinstance(node, Literal):
+            raise AssertionError(node)
+
+    visit(expression)
+    if not found:
+        raise CompilationError("MULTISTAGE_UNSUPPORTED_EXPRESSION", "$.metrics", "cross-grain expression has no AGG metric references")
+    return tuple(found)
 
 def _field(model: BoundModel, name: str, location: str) -> Field:
     field = model.field_by_name.get(name)

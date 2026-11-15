@@ -512,7 +512,7 @@ class CompilerTests(unittest.TestCase):
         self.assertIn("(SUM(t0.`amount`) / COUNT(t0.`customer_id`))", result.sql)
         self.assertNotIn("AGG(", result.sql)
 
-    def test_ossie_03_rejects_cross_grain_agg_until_multistage_planning(self):
+    def test_ossie_03_plans_global_cross_grain_agg_in_stages(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"
         model["datasets"][0]["metrics"] = [
@@ -530,7 +530,43 @@ class CompilerTests(unittest.TestCase):
             }
         ]
 
-        self.assert_error("MIXED_GRAIN", model)
+        result = self.compile(model, Query(metrics=("ratio",)))
+
+        self.assertIn(
+            "s0 AS (SELECT COUNT(t0.`customer_id`) AS `value` FROM "
+            "`default_catalog`.`sales`.`orders` AS t0)",
+            result.sql,
+        )
+        self.assertIn(
+            "s1 AS (SELECT COUNT(t0.`customer_id`) AS `value` FROM "
+            "`default_catalog`.`sales`.`customers` AS t0)",
+            result.sql,
+        )
+        self.assertIn("SELECT (s0.`value` / s1.`value`) AS `m0`", result.sql)
+        self.assertIn("FROM s0 CROSS JOIN s1", result.sql)
+        self.assertEqual(("orders", "customers"), result.dependencies)
+
+    def test_ossie_03_cross_grain_dimensions_fail_closed(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["metrics"] = [
+            {"name": "orders_count", "expression": {"sql": "COUNT(customer_id)"}}
+        ]
+        model["datasets"][1]["metrics"] = [
+            {"name": "customers_count", "expression": {"sql": "COUNT(customer_id)"}}
+        ]
+        model["metrics"] = [
+            {
+                "name": "ratio",
+                "expression": {"sql": "AGG(orders.orders_count) / AGG(customers.customers_count)"},
+            }
+        ]
+
+        self.assert_error(
+            "MULTISTAGE_UNSUPPORTED_SHAPE",
+            model,
+            Query(metrics=("ratio",), dimensions=("customers.country",)),
+        )
 
     def test_ossie_03_rejects_agg_of_a_field(self):
         model = sales_model()

@@ -4,13 +4,15 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from ._expressions import Between, Binary, Call, Case, Column, Expr, FilteredAggregate, InList, IsNull, Like, Literal as ExprLiteral, Star, Unary
+from ._expressions import Between, Binary, Call, Case, Column, Expr, FilteredAggregate, InList, IsNull, Like, Literal as ExprLiteral, MeasureRef, Star, Unary
 from ._model import BoundModel
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 from .api import CompilationError, CompiledQuery, OutputColumn
-from .planning import PlannedFilter, QueryPlan
+from .planning import MultiStageQueryPlan, PlannedFilter, QueryPlan
 
-def render_query(model: BoundModel, plan: QueryPlan) -> CompiledQuery:
+def render_query(model: BoundModel, plan: QueryPlan | MultiStageQueryPlan) -> CompiledQuery:
+    if isinstance(plan, MultiStageQueryPlan):
+        return _render_multistage_query(model, plan)
     root = plan.joins.root
     aliases = {root: "t0"}
     for edge in plan.joins.edges:
@@ -38,6 +40,63 @@ def render_query(model: BoundModel, plan: QueryPlan) -> CompiledQuery:
         lines.append(f"LIMIT {plan.limit}")
     dependencies = tuple(dict.fromkeys([root, *(edge.one for edge in plan.joins.edges)]))
     return CompiledQuery("\n".join(lines), tuple(columns), dependencies)
+
+def _render_multistage_query(model: BoundModel, plan: MultiStageQueryPlan) -> CompiledQuery:
+    stage_names = {(stage.dataset, stage.metric): f"s{index}" for index, stage in enumerate(plan.stages)}
+    ctes = []
+    for stage in plan.stages:
+        stage_name = stage_names[(stage.dataset, stage.metric)]
+        aliases = {stage.dataset: "t0"}
+        ctes.append(
+            f"{stage_name} AS (SELECT {_render_expr(stage.expression, aliases)} AS `value` "
+            f"FROM {_render_table(model, stage.dataset)} AS t0)"
+        )
+    projections = []
+    columns = []
+    for index, metric in enumerate(plan.metrics):
+        alias = f"m{index}"
+        projections.append(f"{_render_multistage_expr(metric.expression, stage_names)} AS `{alias}`")
+        columns.append(OutputColumn(metric.name, alias))
+    lines = ["WITH " + ",\n".join(ctes), "SELECT " + ", ".join(projections)]
+    lines.append("FROM " + " CROSS JOIN ".join(stage_names[(stage.dataset, stage.metric)] for stage in plan.stages))
+    if plan.limit is not None:
+        lines.append(f"LIMIT {plan.limit}")
+    dependencies = tuple(dict.fromkeys(stage.dataset for stage in plan.stages))
+    return CompiledQuery("\n".join(lines), tuple(columns), dependencies)
+
+def _render_multistage_expr(expression: Expr, stages: dict[tuple[str, str], str]) -> str:
+    if isinstance(expression, MeasureRef):
+        return f"{stages[(expression.dataset, expression.metric)]}.`value`"
+    if isinstance(expression, ExprLiteral):
+        return _literal(expression.value)
+    if isinstance(expression, Binary):
+        return f"({_render_multistage_expr(expression.left, stages)} {expression.op} {_render_multistage_expr(expression.right, stages)})"
+    if isinstance(expression, Unary):
+        separator = " " if expression.op == "NOT" else ""
+        return f"({expression.op}{separator}{_render_multistage_expr(expression.operand, stages)})"
+    if isinstance(expression, IsNull):
+        suffix = "IS NOT NULL" if expression.negated else "IS NULL"
+        return f"({_render_multistage_expr(expression.operand, stages)} {suffix})"
+    if isinstance(expression, Case):
+        branches = " ".join(
+            f"WHEN {_render_multistage_expr(condition, stages)} THEN {_render_multistage_expr(value, stages)}"
+            for condition, value in expression.branches
+        )
+        otherwise = f" ELSE {_render_multistage_expr(expression.otherwise, stages)}" if expression.otherwise is not None else ""
+        return f"CASE {branches}{otherwise} END"
+    if isinstance(expression, Between):
+        operator = "NOT BETWEEN" if expression.negated else "BETWEEN"
+        return f"({_render_multistage_expr(expression.operand, stages)} {operator} {_render_multistage_expr(expression.lower, stages)} AND {_render_multistage_expr(expression.upper, stages)})"
+    if isinstance(expression, InList):
+        operator = "NOT IN" if expression.negated else "IN"
+        values = ", ".join(_render_multistage_expr(value, stages) for value in expression.values)
+        return f"({_render_multistage_expr(expression.operand, stages)} {operator} ({values}))"
+    if isinstance(expression, Like):
+        operator = "NOT LIKE" if expression.negated else "LIKE"
+        return f"({_render_multistage_expr(expression.operand, stages)} {operator} {_render_multistage_expr(expression.pattern, stages)})"
+    if isinstance(expression, Call) and expression.name in SUPPORTED_SCALAR_FUNCTIONS:
+        return f"{expression.name}({', '.join(_render_multistage_expr(argument, stages) for argument in expression.args)})"
+    raise CompilationError("MULTISTAGE_UNSUPPORTED_EXPRESSION", "$.metrics", "unsupported node in cross-grain expression")
 
 def _render_table(model: BoundModel, dataset_name: str) -> str:
     return ".".join(f"`{part}`" for part in model.dataset_by_name[dataset_name].source.parts)
@@ -91,6 +150,8 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
             conditional = f"CASE WHEN {predicate} THEN {_render_expr(argument, aliases)} END"
         distinct = "DISTINCT " if aggregate.distinct else ""
         return f"{aggregate.name}({distinct}{conditional})"
+    if isinstance(expression, MeasureRef):
+        return _render_expr(expression.expression, aliases)
     raise AssertionError(expression)
 
 def _render_filter(item: PlannedFilter, aliases: dict[str, str]) -> str:

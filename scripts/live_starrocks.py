@@ -91,6 +91,9 @@ model = {
                 {"name": "ordered_at", "expression": {"sql": "ordered_at"}},
                 {"name": "order_month", "expression": {"sql": "DATE_TRUNC('month', ordered_at)"}},
             ],
+            "metrics": [
+                {"name": "orders_count", "expression": {"sql": "COUNT(customer_id)"}}
+            ],
         },
         {
             "name": "customers",
@@ -99,6 +102,9 @@ model = {
             "fields": [
                 {"name": "customer_id", "expression": {"sql": "customer_id"}},
                 {"name": "country", "expression": {"sql": "country"}},
+            ],
+            "metrics": [
+                {"name": "customers_count", "expression": {"sql": "COUNT(customer_id)"}}
             ],
         },
     ],
@@ -119,6 +125,12 @@ model = {
                 "sql": "COUNT(DISTINCT orders.customer_id) FILTER (WHERE orders.status = 'complete')"
             },
         },
+        {
+            "name": "orders_per_customer",
+            "expression": {
+                "sql": "AGG(orders.orders_count) / AGG(customers.customers_count)"
+            },
+        },
     ],
 }
 
@@ -132,6 +144,17 @@ assert_same(
     SELECT c.country, SUM(o.amount)
     FROM orders o JOIN customers c ON o.customer_id = c.customer_id
     GROUP BY c.country ORDER BY c.country
+    """,
+)
+
+cross_grain = compiler.compile(Query(metrics=("orders_per_customer",)))
+assert_same(
+    "global cross-grain multi-stage aggregate",
+    cross_grain.sql,
+    """
+    SELECT order_stage.value / customer_stage.value
+    FROM (SELECT COUNT(customer_id) AS value FROM orders) order_stage
+    CROSS JOIN (SELECT COUNT(customer_id) AS value FROM customers) customer_stage
     """,
 )
 

@@ -6,7 +6,7 @@ import re
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from ._expressions import Between, Binary, Call, Case, Column, Expr, ExpressionError, FilteredAggregate, InList, IsNull, Like, Star, Unary, contains_call, parse, walk
+from ._expressions import Between, Binary, Call, Case, Column, Expr, ExpressionError, FilteredAggregate, InList, IsNull, Like, MeasureRef, Star, Unary, contains_call, parse, walk
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 from ._schema import validate_03_document
 
@@ -46,8 +46,12 @@ class Field:
 class Metric:
     name: str
     qualified_name: str
-    root: str
+    roots: tuple[str, ...]
     expression: Expr
+
+    @property
+    def root(self) -> str | None:
+        return self.roots[0] if len(self.roots) == 1 else None
 
 
 @dataclass(frozen=True)
@@ -228,22 +232,23 @@ def _bind_metric(
         raise ModelError("INVALID_METRIC_EXPRESSION", location, "metric must contain an aggregate")
     _validate_aggregate_shape(expression, location)
     roots = {node.dataset for node in walk(expression) if isinstance(node, Column)}
+    roots.update(node.dataset for node in _measure_refs(expression))
     if None in roots:
         raise ModelError("UNKNOWN_GRAIN", location, "metric contains an unscoped column")
     if declared_root is not None:
         if roots and roots != {declared_root}:
             raise ModelError("MIXED_GRAIN", location, "dataset metric references another dataset")
         root = declared_root
-    elif len(roots) == 1:
-        root = next(iter(roots))
-        assert root is not None
+    elif roots:
+        root = sorted(value for value in roots if value is not None)[0]
     else:
-        raise ModelError("UNKNOWN_GRAIN" if not roots else "MIXED_GRAIN", location, "metric must have exactly one dataset grain")
+        raise ModelError("UNKNOWN_GRAIN", location, "metric must reference at least one dataset grain")
     if version == "0.2.0.dev0":
         for node in walk(expression):
             if isinstance(node, Column) and f"{node.dataset}.{node.name}" not in fields:
                 raise ModelError("UNKNOWN_FIELD", location, f"unknown field {node.dataset}.{node.name}")
-    return Metric(name, f"{root}.{name}" if declared_root else name, root, expression)
+    metric_roots = (declared_root,) if declared_root is not None else tuple(sorted(value for value in roots if value is not None))
+    return Metric(name, f"{declared_root}.{name}" if declared_root else name, metric_roots, expression)
 
 
 def _validate_aggregate_shape(expression: Expr, location: str) -> None:
@@ -303,6 +308,9 @@ def _validate_aggregate_shape(expression: Expr, location: str) -> None:
                 raise ModelError("INVALID_METRIC_EXPRESSION", location, "FILTER may only modify an aggregate")
             visit(node.aggregate, inside_aggregate)
             visit(node.predicate, True)
+        elif isinstance(node, MeasureRef):
+            if inside_aggregate:
+                raise ModelError("INVALID_METRIC_EXPRESSION", location, "AGG result cannot be nested inside another aggregate")
 
     visit(expression, False)
 
@@ -490,7 +498,8 @@ def _resolve_03_metric_expression(
             metric = dataset_metrics.get(f"{reference.dataset}.{reference.name}")
             if metric is None:
                 raise ModelError("UNKNOWN_METRIC", location, f"unknown dataset metric {reference.dataset}.{reference.name}")
-            return metric.expression
+            assert metric.root is not None
+            return MeasureRef(metric.root, metric.name, metric.expression)
         return Call(
             expression.name,
             tuple(_resolve_03_metric_expression(argument, declared_root, datasets, fields, dataset_metrics, location) for argument in expression.args),
@@ -501,6 +510,48 @@ def _resolve_03_metric_expression(
         assert isinstance(aggregate, Call)
         return FilteredAggregate(aggregate, _resolve_03_metric_expression(expression.predicate, declared_root, datasets, fields, dataset_metrics, location))
     return expression
+
+
+def _measure_refs(expression: Expr) -> tuple[MeasureRef, ...]:
+    found: list[MeasureRef] = []
+
+    def collect(node: Expr) -> None:
+        if isinstance(node, MeasureRef):
+            found.append(node)
+            return
+        if isinstance(node, Binary):
+            collect(node.left)
+            collect(node.right)
+        elif isinstance(node, Unary):
+            collect(node.operand)
+        elif isinstance(node, IsNull):
+            collect(node.operand)
+        elif isinstance(node, Case):
+            for condition, value in node.branches:
+                collect(condition)
+                collect(value)
+            if node.otherwise is not None:
+                collect(node.otherwise)
+        elif isinstance(node, Between):
+            collect(node.operand)
+            collect(node.lower)
+            collect(node.upper)
+        elif isinstance(node, InList):
+            collect(node.operand)
+            for value in node.values:
+                collect(value)
+        elif isinstance(node, Like):
+            collect(node.operand)
+            collect(node.pattern)
+        elif isinstance(node, Call):
+            for argument in node.args:
+                collect(argument)
+        elif isinstance(node, FilteredAggregate):
+            collect(node.aggregate)
+            collect(node.predicate)
+
+    collect(expression)
+    return tuple(found)
 
 
 def _bind_relationships(raw_relationships: Any, datasets: Mapping[str, Dataset], fields: Mapping[str, Field]) -> list[Relationship]:
