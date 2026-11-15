@@ -94,6 +94,8 @@ def bind_model(raw: dict[str, Any]) -> BoundModel:
     version = _required_string(raw, "version", "$.version")
     if version not in _SUPPORTED_VERSIONS:
         raise ModelError("UNSUPPORTED_MODEL_VERSION", "$.version", f"unsupported Ossie version {version!r}")
+    if version == "0.3.0.dev0":
+        _validate_03_shape(raw)
     name = _required_identifier(raw, "name", "$.name")
     raw_datasets = raw.get("datasets")
     if not isinstance(raw_datasets, list) or not raw_datasets:
@@ -156,12 +158,16 @@ def bind_model(raw: dict[str, Any]) -> BoundModel:
 
     dataset_by_name = {dataset.name: dataset for dataset in datasets}
     field_by_name = {f"{field.dataset}.{field.name}": field for field in fields}
-    fields, field_by_name = _expand_fields(fields, field_by_name)
-    _validate_expression_columns(fields, dataset_by_name, field_by_name)
+    # 0.3 field expressions name physical source columns. Earlier documents
+    # commonly treated them as references to other declared fields, which we
+    # preserve only in the 0.2 compatibility adapter.
+    if version == "0.2.0.dev0":
+        fields, field_by_name = _expand_fields(fields, field_by_name)
+        _validate_expression_columns(fields, dataset_by_name, field_by_name)
 
     metrics: list[Metric] = []
     for raw_metric, root, location in dataset_metrics:
-        metrics.append(_bind_metric(raw_metric, location, root, dataset_by_name, field_by_name))
+        metrics.append(_bind_metric(raw_metric, location, root, dataset_by_name, field_by_name, version))
     raw_root_metrics = raw.get("metrics", [])
     if not isinstance(raw_root_metrics, list):
         raise ModelError("INVALID_MODEL", "$.metrics", "metrics must be an array")
@@ -169,7 +175,11 @@ def bind_model(raw: dict[str, Any]) -> BoundModel:
         location = f"$.metrics[{metric_index}]"
         if not isinstance(raw_metric, dict):
             raise ModelError("INVALID_MODEL", location, "metric must be an object")
-        metrics.append(_bind_metric(raw_metric, location, None, dataset_by_name, field_by_name))
+        metrics.append(_bind_metric(raw_metric, location, None, dataset_by_name, field_by_name, version))
+    dataset_metric_names = {metric.qualified_name for metric in metrics if metric.qualified_name != metric.name}
+    collision = sorted(dataset_metric_names & set(field_by_name))
+    if collision:
+        raise ModelError("DUPLICATE_NAME", "$.datasets", f"field and metric share a dataset namespace: {collision[0]!r}")
     metric_by_name = _metric_index(metrics)
 
     relationships = _bind_relationships(raw.get("relationships", []), dataset_by_name, field_by_name)
@@ -192,13 +202,19 @@ def bind_model(raw: dict[str, Any]) -> BoundModel:
     )
 
 
-def _bind_metric(raw: dict[str, Any], location: str, declared_root: str | None, datasets: Mapping[str, Dataset], fields: Mapping[str, Field]) -> Metric:
+def _bind_metric(raw: dict[str, Any], location: str, declared_root: str | None, datasets: Mapping[str, Dataset], fields: Mapping[str, Field], version: str) -> Metric:
     name = _required_identifier(raw, "name", f"{location}.name")
     expression = _parse_expression(raw.get("expression"), location)
     if not contains_call(expression, SUPPORTED_AGGREGATES):
         raise ModelError("INVALID_METRIC_EXPRESSION", location, "metric must contain an aggregate")
     expression = _scope_expression(expression, declared_root, set(datasets))
-    expression = _expand_expression(expression, fields, (), None)
+    if version == "0.3.0.dev0":
+        for node in walk(expression):
+            if isinstance(node, Column) and f"{node.dataset}.{node.name}" not in fields:
+                raise ModelError("UNKNOWN_FIELD", location, f"unknown field {node.dataset}.{node.name}")
+        expression = _expand_03_metric_expression(expression, fields)
+    else:
+        expression = _expand_expression(expression, fields, (), None)
     _validate_aggregate_shape(expression, location)
     roots = {node.dataset for node in walk(expression) if isinstance(node, Column)}
     if None in roots:
@@ -212,9 +228,10 @@ def _bind_metric(raw: dict[str, Any], location: str, declared_root: str | None, 
         assert root is not None
     else:
         raise ModelError("UNKNOWN_GRAIN" if not roots else "MIXED_GRAIN", location, "metric must have exactly one dataset grain")
-    for node in walk(expression):
-        if isinstance(node, Column) and f"{node.dataset}.{node.name}" not in fields:
-            raise ModelError("UNKNOWN_FIELD", location, f"unknown field {node.dataset}.{node.name}")
+    if version == "0.2.0.dev0":
+        for node in walk(expression):
+            if isinstance(node, Column) and f"{node.dataset}.{node.name}" not in fields:
+                raise ModelError("UNKNOWN_FIELD", location, f"unknown field {node.dataset}.{node.name}")
     return Metric(name, f"{root}.{name}" if declared_root else name, root, expression)
 
 
@@ -295,6 +312,18 @@ def _expand_expression(expression: Expr, field_by_name: Mapping[str, Field], sta
         return Binary(expression.op, _expand_expression(expression.left, field_by_name, stack, owner), _expand_expression(expression.right, field_by_name, stack, owner))
     if isinstance(expression, Call):
         return Call(expression.name, tuple(_expand_expression(argument, field_by_name, stack, owner) for argument in expression.args))
+    return expression
+
+
+def _expand_03_metric_expression(expression: Expr, field_by_name: Mapping[str, Field]) -> Expr:
+    """Replace semantic field references once; field bodies already name source columns."""
+    if isinstance(expression, Column) and expression.dataset is not None:
+        field = field_by_name.get(f"{expression.dataset}.{expression.name}")
+        return field.expression if field is not None else expression
+    if isinstance(expression, Binary):
+        return Binary(expression.op, _expand_03_metric_expression(expression.left, field_by_name), _expand_03_metric_expression(expression.right, field_by_name))
+    if isinstance(expression, Call):
+        return Call(expression.name, tuple(_expand_03_metric_expression(argument, field_by_name) for argument in expression.args))
     return expression
 
 
@@ -381,6 +410,56 @@ def _parse_expression(raw: Any, location: str) -> Expr:
         return parse(sql)
     except ExpressionError as error:
         raise ModelError("UNSUPPORTED_EXPRESSION", f"{location}.expression", str(error)) from error
+
+
+def _validate_03_shape(raw: dict[str, Any]) -> None:
+    """Validate the closed structural portion of the official 0.3 core schema."""
+    root = {"version", "name", "description", "ai_context", "datasets", "relationships", "metrics", "nonportable_extensions"}
+    dataset = {"name", "source", "primary_key", "unique_keys", "description", "ai_context", "fields", "metrics", "nonportable_extensions"}
+    field = {"name", "expression", "dimension", "label", "description", "datatype", "ai_context", "nonportable_extensions"}
+    metric = {"name", "expression", "description", "datatype", "ai_context", "nonportable_extensions"}
+    relationship = {"name", "from", "to", "from_columns", "to_columns", "ai_context", "nonportable_extensions"}
+    expression = {"sql", "dialects"}
+
+    _reject_unknown(raw, root, "$")
+    raw_datasets = raw.get("datasets", [])
+    for i, item in enumerate(raw_datasets if isinstance(raw_datasets, list) else []):
+        if isinstance(item, dict):
+            location = f"$.datasets[{i}]"
+            _reject_unknown(item, dataset, location)
+            raw_fields = item.get("fields", [])
+            for j, value in enumerate(raw_fields if isinstance(raw_fields, list) else []):
+                if isinstance(value, dict):
+                    _reject_unknown(value, field, f"{location}.fields[{j}]")
+                    _validate_expression_shape(value.get("expression"), f"{location}.fields[{j}].expression", expression)
+            raw_dataset_metrics = item.get("metrics", [])
+            for j, value in enumerate(raw_dataset_metrics if isinstance(raw_dataset_metrics, list) else []):
+                if isinstance(value, dict):
+                    _reject_unknown(value, metric, f"{location}.metrics[{j}]")
+                    _validate_expression_shape(value.get("expression"), f"{location}.metrics[{j}].expression", expression)
+    raw_metrics = raw.get("metrics", [])
+    for i, item in enumerate(raw_metrics if isinstance(raw_metrics, list) else []):
+        if isinstance(item, dict):
+            _reject_unknown(item, metric, f"$.metrics[{i}]")
+            _validate_expression_shape(item.get("expression"), f"$.metrics[{i}].expression", expression)
+    raw_relationships = raw.get("relationships", [])
+    for i, item in enumerate(raw_relationships if isinstance(raw_relationships, list) else []):
+        if isinstance(item, dict):
+            _reject_unknown(item, relationship, f"$.relationships[{i}]")
+
+
+def _validate_expression_shape(raw: Any, location: str, allowed: set[str]) -> None:
+    if not isinstance(raw, dict):
+        raise ModelError("INVALID_MODEL", location, "0.3 expression must be an object")
+    _reject_unknown(raw, allowed, location)
+    if "sql" not in raw and "dialects" not in raw:
+        raise ModelError("INVALID_MODEL", location, "expression requires sql or dialects")
+
+
+def _reject_unknown(raw: Mapping[str, Any], allowed: set[str], location: str) -> None:
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise ModelError("INVALID_MODEL", location, f"unknown property {unknown[0]!r}")
 
 
 def _scope_expression(expression: Expr, default_dataset: str | None, datasets: set[str]) -> Expr:

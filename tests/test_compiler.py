@@ -184,6 +184,46 @@ class CompilerTests(unittest.TestCase):
         result = self.compile(model, Query(metrics=("revenue",)))
         self.assertIn("SUM(t0.`amount`) AS `m0`", result.sql)
 
+    def test_ossie_03_field_expression_names_source_columns(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].append(field("gross", "raw_amount * 2"))
+        model["metrics"][0]["expression"] = {"sql": "SUM(orders.gross)"}
+
+        result = self.compile(model, Query(metrics=("revenue",)))
+
+        self.assertIn("SUM((t0.`raw_amount` * 2))", result.sql)
+
+    def test_ossie_03_does_not_expand_field_names_inside_field_expressions(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].extend(
+            [field("first", "second + 1"), field("second", "first + 1")]
+        )
+        model["metrics"][0]["expression"] = {"sql": "SUM(orders.first)"}
+
+        result = self.compile(model, Query(metrics=("revenue",)))
+
+        self.assertIn("SUM((t0.`second` + 1))", result.sql)
+
+    def test_ossie_03_rejects_unknown_core_properties(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["dialects"] = []
+        self.assert_error("INVALID_MODEL", model)
+
+    def test_ossie_03_requires_expression_objects(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"][0]["expression"] = "SUM(orders.amount)"
+        self.assert_error("INVALID_MODEL", model)
+
+    def test_rejects_field_metric_namespace_collision(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["metrics"] = [metric("amount", "SUM(amount)")]
+        self.assert_error("DUPLICATE_NAME", model)
+
 
 if __name__ == "__main__":
     unittest.main()
