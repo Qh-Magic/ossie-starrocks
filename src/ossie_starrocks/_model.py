@@ -207,13 +207,10 @@ def _bind_metric(raw: dict[str, Any], location: str, declared_root: str | None, 
     expression = _parse_expression(raw.get("expression"), location)
     if not contains_call(expression, SUPPORTED_AGGREGATES):
         raise ModelError("INVALID_METRIC_EXPRESSION", location, "metric must contain an aggregate")
-    expression = _scope_expression(expression, declared_root, set(datasets))
     if version == "0.3.0.dev0":
-        for node in walk(expression):
-            if isinstance(node, Column) and f"{node.dataset}.{node.name}" not in fields:
-                raise ModelError("UNKNOWN_FIELD", location, f"unknown field {node.dataset}.{node.name}")
-        expression = _expand_03_metric_expression(expression, fields)
+        expression = _resolve_03_metric_expression(expression, declared_root, datasets, fields, location)
     else:
+        expression = _scope_expression(expression, declared_root, set(datasets))
         expression = _expand_expression(expression, fields, (), None)
     _validate_aggregate_shape(expression, location)
     roots = {node.dataset for node in walk(expression) if isinstance(node, Column)}
@@ -315,15 +312,46 @@ def _expand_expression(expression: Expr, field_by_name: Mapping[str, Field], sta
     return expression
 
 
-def _expand_03_metric_expression(expression: Expr, field_by_name: Mapping[str, Field]) -> Expr:
-    """Replace semantic field references once; field bodies already name source columns."""
-    if isinstance(expression, Column) and expression.dataset is not None:
-        field = field_by_name.get(f"{expression.dataset}.{expression.name}")
-        return field.expression if field is not None else expression
+def _resolve_03_metric_expression(
+    expression: Expr,
+    declared_root: str | None,
+    datasets: Mapping[str, Dataset],
+    fields: Mapping[str, Field],
+    location: str,
+) -> Expr:
+    """Resolve 0.3 metric names according to dataset/model metric scope."""
+    if isinstance(expression, Column):
+        if declared_root is not None:
+            if expression.dataset is None:
+                field = fields.get(f"{declared_root}.{expression.name}")
+                if field is None:
+                    raise ModelError("UNKNOWN_FIELD", location, f"unknown field {declared_root}.{expression.name}")
+                return field.expression
+            if expression.dataset.lower() == "source":
+                if f"{declared_root}.source" in fields:
+                    raise ModelError("INVALID_METRIC_EXPRESSION", location, "field named 'source' shadows source-column qualification")
+                return Column(declared_root, expression.name)
+            raise ModelError("MIXED_GRAIN", location, "dataset metric may reference only its fields or source columns")
+
+        if expression.dataset is None:
+            raise ModelError("UNKNOWN_FIELD", location, f"model metric field must be dataset-qualified: {expression.name!r}")
+        if expression.dataset not in datasets:
+            raise ModelError("UNKNOWN_DATASET", location, f"unknown dataset {expression.dataset!r}")
+        field = fields.get(f"{expression.dataset}.{expression.name}")
+        if field is None:
+            raise ModelError("UNKNOWN_FIELD", location, f"unknown field {expression.dataset}.{expression.name}")
+        return field.expression
     if isinstance(expression, Binary):
-        return Binary(expression.op, _expand_03_metric_expression(expression.left, field_by_name), _expand_03_metric_expression(expression.right, field_by_name))
+        return Binary(
+            expression.op,
+            _resolve_03_metric_expression(expression.left, declared_root, datasets, fields, location),
+            _resolve_03_metric_expression(expression.right, declared_root, datasets, fields, location),
+        )
     if isinstance(expression, Call):
-        return Call(expression.name, tuple(_expand_03_metric_expression(argument, field_by_name) for argument in expression.args))
+        return Call(
+            expression.name,
+            tuple(_resolve_03_metric_expression(argument, declared_root, datasets, fields, location) for argument in expression.args),
+        )
     return expression
 
 

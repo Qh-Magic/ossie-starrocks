@@ -68,6 +68,7 @@ The current release accepts the following model and query features.
 - Flat Ossie documents with version `0.2.0.dev0` or `0.3.0.dev0`.
 - Closed 0.3 core shapes: unknown core properties and string-valued expressions are rejected.
 - Version-aware name resolution: 0.3 field expressions name source columns, while metric expressions name declared semantic fields.
+- Ossie 0.3 dataset metrics may reference physical columns as `source.column`, including the specified `source` field-shadowing rule.
 - JSON models and YAML models when PyYAML is installed.
 - Table-backed sources with one to three identifier components.
 - Dataset fields with `ANSI_SQL`, `OSSIE_SQL_2026`, or 0.3 `expression.sql` expressions.

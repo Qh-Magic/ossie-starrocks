@@ -224,6 +224,36 @@ class CompilerTests(unittest.TestCase):
         model["datasets"][0]["metrics"] = [metric("amount", "SUM(amount)")]
         self.assert_error("DUPLICATE_NAME", model)
 
+    def test_ossie_03_dataset_metric_accepts_source_column(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = []
+        model["datasets"][0]["metrics"] = [
+            {"name": "raw_revenue", "expression": {"sql": "SUM(source.raw_amount)"}}
+        ]
+
+        result = self.compile(model, Query(metrics=("orders.raw_revenue",)))
+
+        self.assertIn("SUM(t0.`raw_amount`) AS `m0`", result.sql)
+
+    def test_ossie_03_source_field_shadows_source_column_qualifier(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = []
+        model["datasets"][0]["fields"].append(field("source", "physical_source"))
+        model["datasets"][0]["metrics"] = [
+            {"name": "raw_revenue", "expression": {"sql": "SUM(source.raw_amount)"}}
+        ]
+
+        self.assert_error("INVALID_METRIC_EXPRESSION", model)
+
+    def test_ossie_03_model_metric_requires_dataset_qualified_fields(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"][0]["expression"] = {"sql": "SUM(amount)"}
+
+        self.assert_error("UNKNOWN_FIELD", model)
+
 
 if __name__ == "__main__":
     unittest.main()
