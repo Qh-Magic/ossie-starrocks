@@ -27,9 +27,15 @@ class QueryPlan:
     limit: int | None
 
 @dataclass(frozen=True)
+class MultiStageStage:
+    reference: MeasureRef
+    joins: SafeJoinTree
+
+@dataclass(frozen=True)
 class MultiStageQueryPlan:
     metrics: tuple[Metric, ...]
-    stages: tuple[MeasureRef, ...]
+    dimensions: tuple[Field, ...]
+    stages: tuple[MultiStageStage, ...]
     limit: int | None
 
 def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPlan:
@@ -51,21 +57,31 @@ def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPl
     if query.limit is not None and (type(query.limit) is not int or not 0 <= query.limit <= 2_147_483_647):
         raise CompilationError("INVALID_LIMIT", "$.limit", "limit must be a non-negative integer")
     if multistage:
-        if dimensions or where_pairs or having_pairs:
+        if where_pairs or having_pairs:
             raise CompilationError(
                 "MULTISTAGE_UNSUPPORTED_SHAPE",
                 "$",
-                "cross-grain metrics currently require a global query without dimensions, WHERE, or HAVING",
+                "cross-grain metrics currently do not support WHERE or HAVING",
             )
-        stages: list[MeasureRef] = []
+        references: list[MeasureRef] = []
         seen_stages: set[tuple[str, str]] = set()
         for metric in metrics:
             for reference in _multistage_refs(metric.expression):
                 key = (reference.dataset, reference.metric)
                 if key not in seen_stages:
-                    stages.append(reference)
+                    references.append(reference)
                     seen_stages.add(key)
-        return MultiStageQueryPlan(metrics, tuple(stages), query.limit)
+        stages: list[MultiStageStage] = []
+        for reference in references:
+            edges: list[Relationship] = []
+            seen_edges: set[str] = set()
+            for dataset in sorted({field.dataset for field in dimensions}):
+                for edge in _unique_path(model, reference.dataset, dataset):
+                    if edge.name not in seen_edges:
+                        edges.append(edge)
+                        seen_edges.add(edge.name)
+            stages.append(MultiStageStage(reference, SafeJoinTree(reference.dataset, tuple(edges))))
+        return MultiStageQueryPlan(metrics, dimensions, tuple(stages), query.limit)
     root = next(iter(roots))
     assert root is not None
     required = {root, *(field.dataset for field in dimensions), *(field.dataset for field, _ in where_pairs)}

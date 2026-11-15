@@ -158,6 +158,31 @@ assert_same(
     """,
 )
 
+keyed_cross_grain = compiler.compile(
+    Query(metrics=("orders_per_customer",), dimensions=("customers.country",))
+)
+assert_same(
+    "keyed cross-grain multi-stage aggregate",
+    keyed_cross_grain.sql + " ORDER BY d0",
+    """
+    SELECT COALESCE(order_stage.country, customer_stage.country),
+           order_stage.value / customer_stage.value
+    FROM (
+        SELECT c.country, COUNT(o.customer_id) AS value
+        FROM orders o JOIN customers c ON o.customer_id = c.customer_id
+        GROUP BY c.country
+    ) order_stage
+    FULL OUTER JOIN (
+        SELECT country, COUNT(customer_id) AS value
+        FROM customers
+        GROUP BY country
+    ) customer_stage
+    ON order_stage.country = customer_stage.country
+       OR (order_stage.country IS NULL AND customer_stage.country IS NULL)
+    ORDER BY COALESCE(order_stage.country, customer_stage.country)
+    """,
+)
+
 filtered = compiler.compile(Query(metrics=("active_customers",), dimensions=("orders.order_month",)))
 assert_same(
     "date function and filtered distinct aggregate",

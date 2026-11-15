@@ -73,7 +73,7 @@ The current release accepts the following model and query features.
 - Table-backed sources with one to three identifier components.
 - Dataset fields with `ANSI_SQL`, `OSSIE_SQL_2026`, or 0.3 `expression.sql` expressions.
 - Root-level metrics and dataset-scoped metrics.
-- Ossie 0.3 `AGG(dataset.metric)` evaluation, including global cross-grain metrics through independent aggregate CTE stages. Cross-grain grouping and filters fail closed pending keyed multi-stage planning.
+- Ossie 0.3 `AGG(dataset.metric)` evaluation through independent aggregate CTE stages, including cross-grain grouping when every stage has a safe many-to-one path to the requested dimensions. Cross-grain filters still fail closed pending filter-placement semantics.
 - `SUM`, `COUNT`, `MIN`, `MAX`, and `AVG` aggregates.
 - `COUNT(DISTINCT ...)`, `SUM(DISTINCT ...)`, and aggregate `FILTER (WHERE ...)`; filters are lowered to NULL-preserving conditional aggregates for StarRocks.
 - Direct StarRocks lowering for a verified OSSIE SQL scalar subset: case/trim/length and substring functions, basic numeric functions, date-part extraction, and `DATE_TRUNC`.

@@ -42,26 +42,74 @@ def render_query(model: BoundModel, plan: QueryPlan | MultiStageQueryPlan) -> Co
     return CompiledQuery("\n".join(lines), tuple(columns), dependencies)
 
 def _render_multistage_query(model: BoundModel, plan: MultiStageQueryPlan) -> CompiledQuery:
-    stage_names = {(stage.dataset, stage.metric): f"s{index}" for index, stage in enumerate(plan.stages)}
+    stage_names = {
+        (stage.reference.dataset, stage.reference.metric): f"s{index}"
+        for index, stage in enumerate(plan.stages)
+    }
     ctes = []
     for stage in plan.stages:
-        stage_name = stage_names[(stage.dataset, stage.metric)]
-        aliases = {stage.dataset: "t0"}
-        ctes.append(
-            f"{stage_name} AS (SELECT {_render_expr(stage.expression, aliases)} AS `value` "
-            f"FROM {_render_table(model, stage.dataset)} AS t0)"
-        )
+        reference = stage.reference
+        stage_name = stage_names[(reference.dataset, reference.metric)]
+        aliases = {stage.joins.root: "t0"}
+        for edge in stage.joins.edges:
+            aliases.setdefault(edge.one, f"t{len(aliases)}")
+        projections = [
+            *(
+                f"{_render_expr(field.expression, aliases)} AS `k{index}`"
+                for index, field in enumerate(plan.dimensions)
+            ),
+            f"{_render_expr(reference.expression, aliases)} AS `value`",
+        ]
+        lines = [
+            f"{stage_name} AS (SELECT {', '.join(projections)}",
+            f"FROM {_render_table(model, stage.joins.root)} AS t0",
+        ]
+        for edge in stage.joins.edges:
+            conditions = " AND ".join(
+                f"{aliases[edge.many]}.`{left}` = {aliases[edge.one]}.`{right}`"
+                for left, right in edge.keys
+            )
+            lines.append(f"INNER JOIN {_render_table(model, edge.one)} AS {aliases[edge.one]} ON {conditions}")
+        if plan.dimensions:
+            lines.append("GROUP BY " + ", ".join(_render_expr(field.expression, aliases) for field in plan.dimensions))
+        lines[-1] += ")"
+        ctes.append("\n".join(lines))
     projections = []
     columns = []
+    ordered_stage_names = [stage_names[(stage.reference.dataset, stage.reference.metric)] for stage in plan.stages]
+    for index, field in enumerate(plan.dimensions):
+        alias = f"d{index}"
+        keys = ", ".join(f"{stage_name}.`k{index}`" for stage_name in ordered_stage_names)
+        projections.append(f"COALESCE({keys}) AS `{alias}`")
+        columns.append(OutputColumn(f"{field.dataset}.{field.name}", alias))
     for index, metric in enumerate(plan.metrics):
         alias = f"m{index}"
         projections.append(f"{_render_multistage_expr(metric.expression, stage_names)} AS `{alias}`")
         columns.append(OutputColumn(metric.name, alias))
     lines = ["WITH " + ",\n".join(ctes), "SELECT " + ", ".join(projections)]
-    lines.append("FROM " + " CROSS JOIN ".join(stage_names[(stage.dataset, stage.metric)] for stage in plan.stages))
+    if not plan.dimensions:
+        lines.append("FROM " + " CROSS JOIN ".join(ordered_stage_names))
+    else:
+        from_clause = f"FROM {ordered_stage_names[0]}"
+        joined = [ordered_stage_names[0]]
+        for stage_name in ordered_stage_names[1:]:
+            conditions = []
+            for index in range(len(plan.dimensions)):
+                prior = f"COALESCE({', '.join(f'{name}.`k{index}`' for name in joined)})"
+                current = f"{stage_name}.`k{index}`"
+                conditions.append(f"({prior} = {current} OR ({prior} IS NULL AND {current} IS NULL))")
+            from_clause += f"\nFULL OUTER JOIN {stage_name} ON " + " AND ".join(conditions)
+            joined.append(stage_name)
+        lines.append(from_clause)
     if plan.limit is not None:
         lines.append(f"LIMIT {plan.limit}")
-    dependencies = tuple(dict.fromkeys(stage.dataset for stage in plan.stages))
+    dependencies = tuple(
+        dict.fromkeys(
+            dependency
+            for stage in plan.stages
+            for dependency in (stage.joins.root, *(edge.one for edge in stage.joins.edges))
+        )
+    )
     return CompiledQuery("\n".join(lines), tuple(columns), dependencies)
 
 def _render_multistage_expr(expression: Expr, stages: dict[tuple[str, str], str]) -> str:
