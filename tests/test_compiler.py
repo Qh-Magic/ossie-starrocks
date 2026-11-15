@@ -212,6 +212,50 @@ class CompilerTests(unittest.TestCase):
         model["dialects"] = []
         self.assert_error("INVALID_MODEL", model)
 
+    def test_ossie_03_official_schema_rejects_invalid_metadata(self):
+        cases = []
+
+        invalid_datatype = sales_model()
+        invalid_datatype["version"] = "0.3.0.dev0"
+        invalid_datatype["datasets"][0]["fields"][0]["datatype"] = "Money"
+        cases.append(invalid_datatype)
+
+        invalid_dimension = sales_model()
+        invalid_dimension["version"] = "0.3.0.dev0"
+        invalid_dimension["datasets"][0]["fields"][0]["dimension"] = {"is_time": "yes"}
+        cases.append(invalid_dimension)
+
+        invalid_dialect = sales_model()
+        invalid_dialect["version"] = "0.3.0.dev0"
+        invalid_dialect["datasets"][0]["fields"][0]["expression"] = {
+            "dialects": [{"dialect": "OSSIE_SQL_2026"}]
+        }
+        cases.append(invalid_dialect)
+
+        invalid_extension = sales_model()
+        invalid_extension["version"] = "0.3.0.dev0"
+        invalid_extension["nonportable_extensions"] = [{"vendor_name": "STARROCKS"}]
+        cases.append(invalid_extension)
+
+        for model in cases:
+            with self.subTest(model=model):
+                self.assert_error("INVALID_MODEL", model)
+
+    def test_ossie_03_official_schema_accepts_portable_metadata(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["description"] = "Sales model"
+        model["datasets"][0]["fields"][0].update(
+            {"datatype": "Integer", "dimension": {"is_time": False}}
+        )
+        model["nonportable_extensions"] = [
+            {"vendor_name": "STARROCKS", "data": {"distribution": ["customer_id"]}}
+        ]
+
+        result = self.compile(model, Query(metrics=("revenue",)))
+
+        self.assertIn("SUM(t0.`amount`)", result.sql)
+
     def test_ossie_03_requires_expression_objects(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"

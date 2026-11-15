@@ -7,7 +7,7 @@ name = "ossie-starrocks"
 version = "0.1.0"
 description = "Fail-closed Apache Ossie semantic compiler for StarRocks"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["jsonschema>=4.18,<5"]
 
 [project.optional-dependencies]
 yaml = ["PyYAML>=6"]
@@ -20,3 +20,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+ossie_starrocks = ["ossie-schema-0.3.json"]

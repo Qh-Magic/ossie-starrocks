@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from ._expressions import Between, Binary, Call, Case, Column, Expr, ExpressionError, FilteredAggregate, InList, IsNull, Like, Star, Unary, contains_call, parse, walk
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
+from ._schema import validate_03_document
 
 
 class ModelError(ValueError):
@@ -95,7 +96,10 @@ def bind_model(raw: dict[str, Any]) -> BoundModel:
     if version not in _SUPPORTED_VERSIONS:
         raise ModelError("UNSUPPORTED_MODEL_VERSION", "$.version", f"unsupported Ossie version {version!r}")
     if version == "0.3.0.dev0":
-        _validate_03_shape(raw)
+        schema_error = validate_03_document(raw)
+        if schema_error is not None:
+            location, message = schema_error
+            raise ModelError("INVALID_MODEL", location, message)
     name = _required_identifier(raw, "name", "$.name")
     raw_datasets = raw.get("datasets")
     if not isinstance(raw_datasets, list) or not raw_datasets:
@@ -582,56 +586,6 @@ def _parse_expression(raw: Any, location: str) -> Expr:
         return parse(sql)
     except ExpressionError as error:
         raise ModelError("UNSUPPORTED_EXPRESSION", f"{location}.expression", str(error)) from error
-
-
-def _validate_03_shape(raw: dict[str, Any]) -> None:
-    """Validate the closed structural portion of the official 0.3 core schema."""
-    root = {"version", "name", "description", "ai_context", "datasets", "relationships", "metrics", "nonportable_extensions"}
-    dataset = {"name", "source", "primary_key", "unique_keys", "description", "ai_context", "fields", "metrics", "nonportable_extensions"}
-    field = {"name", "expression", "dimension", "label", "description", "datatype", "ai_context", "nonportable_extensions"}
-    metric = {"name", "expression", "description", "datatype", "ai_context", "nonportable_extensions"}
-    relationship = {"name", "from", "to", "from_columns", "to_columns", "ai_context", "nonportable_extensions"}
-    expression = {"sql", "dialects"}
-
-    _reject_unknown(raw, root, "$")
-    raw_datasets = raw.get("datasets", [])
-    for i, item in enumerate(raw_datasets if isinstance(raw_datasets, list) else []):
-        if isinstance(item, dict):
-            location = f"$.datasets[{i}]"
-            _reject_unknown(item, dataset, location)
-            raw_fields = item.get("fields", [])
-            for j, value in enumerate(raw_fields if isinstance(raw_fields, list) else []):
-                if isinstance(value, dict):
-                    _reject_unknown(value, field, f"{location}.fields[{j}]")
-                    _validate_expression_shape(value.get("expression"), f"{location}.fields[{j}].expression", expression)
-            raw_dataset_metrics = item.get("metrics", [])
-            for j, value in enumerate(raw_dataset_metrics if isinstance(raw_dataset_metrics, list) else []):
-                if isinstance(value, dict):
-                    _reject_unknown(value, metric, f"{location}.metrics[{j}]")
-                    _validate_expression_shape(value.get("expression"), f"{location}.metrics[{j}].expression", expression)
-    raw_metrics = raw.get("metrics", [])
-    for i, item in enumerate(raw_metrics if isinstance(raw_metrics, list) else []):
-        if isinstance(item, dict):
-            _reject_unknown(item, metric, f"$.metrics[{i}]")
-            _validate_expression_shape(item.get("expression"), f"$.metrics[{i}].expression", expression)
-    raw_relationships = raw.get("relationships", [])
-    for i, item in enumerate(raw_relationships if isinstance(raw_relationships, list) else []):
-        if isinstance(item, dict):
-            _reject_unknown(item, relationship, f"$.relationships[{i}]")
-
-
-def _validate_expression_shape(raw: Any, location: str, allowed: set[str]) -> None:
-    if not isinstance(raw, dict):
-        raise ModelError("INVALID_MODEL", location, "0.3 expression must be an object")
-    _reject_unknown(raw, allowed, location)
-    if "sql" not in raw and "dialects" not in raw:
-        raise ModelError("INVALID_MODEL", location, "expression requires sql or dialects")
-
-
-def _reject_unknown(raw: Mapping[str, Any], allowed: set[str], location: str) -> None:
-    unknown = sorted(set(raw) - allowed)
-    if unknown:
-        raise ModelError("INVALID_MODEL", location, f"unknown property {unknown[0]!r}")
 
 
 def _scope_expression(expression: Expr, default_dataset: str | None, datasets: set[str]) -> Expr:

@@ -66,7 +66,7 @@ The command writes SQL to stdout. It writes a JSON diagnostic to stderr and exit
 The current release accepts the following model and query features.
 
 - Flat Ossie documents with version `0.2.0.dev0` or `0.3.0.dev0`.
-- Closed 0.3 core shapes: unknown core properties and string-valued expressions are rejected.
+- Full JSON Schema validation against the bundled Apache Ossie 0.3 draft core schema before semantic binding.
 - Version-aware name resolution: 0.3 field expressions name source columns, while metric expressions name declared semantic fields.
 - Ossie 0.3 dataset metrics may reference physical columns as `source.column`, including the specified `source` field-shadowing rule.
 - JSON models and YAML models when PyYAML is installed.
@@ -111,7 +111,7 @@ The script compiles the package and runs the library and CLI behavior tests. A l
 
 The compiler normalizes an Ossie document into immutable datasets, fields, metrics, and a directed many-to-one relationship graph. The planner proves one metric grain and one safe path to every required dataset. The renderer accepts only owned expression nodes and emits one StarRocks `SELECT`.
 
-The 0.3 loader follows the Apache Ossie draft core schema where implemented. It is not yet a full schema or expression-language implementation; unsupported constructs fail closed.
+The 0.3 loader validates against the Apache Ossie draft core schema bundled from [`core-spec/ossie-schema.json`](https://github.com/apache/ossie/blob/main/core-spec/ossie-schema.json), then applies semantic-reference and StarRocks capability checks. The expression language is still a documented subset; unsupported constructs fail closed.
 
 ## License
 
