@@ -77,6 +77,7 @@ The current release accepts the following model and query features.
 - Ossie 0.3 `AGG(dataset.metric)` evaluation through independent aggregate CTE stages, including cross-grain grouping when every stage has a safe many-to-one path to the requested dimensions.
 - Cross-grain field filters are pushed into every aggregate stage only when each stage can reach the filtered field through a safe many-to-one path. Cross-grain metric filters are evaluated after the stages are joined. Unsafe fan-out traversal fails closed.
 - Metrics from different home datasets are evaluated in independent branches and stitched with null-safe full outer joins. A branch-presence marker supplies each metric's true empty-input value, so a missing `COUNT` becomes `0` while a missing or all-NULL `SUM` remains `NULL`.
+- Model-scoped metrics may combine aggregate components from different datasets directly, such as `SUM(orders.amount) / COUNT(customers.customer_id)`. Each aggregate call must read exactly one home dataset; the planner stages the components independently and evaluates the scalar expression after stitching.
 - `SUM`, `COUNT`, `MIN`, `MAX`, and `AVG` aggregates.
 - `COUNT(DISTINCT ...)`, `SUM(DISTINCT ...)`, and aggregate `FILTER (WHERE ...)`; filters are lowered to NULL-preserving conditional aggregates for StarRocks.
 - Direct StarRocks lowering for a verified OSSIE SQL scalar subset: case/trim/length and substring functions, basic numeric functions, date-part extraction, and `DATE_TRUNC`.

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from ._expressions import Between, Binary, Call, Case, Column, Expr, FilteredAggregate, InList, IsNull, Like, Literal, MeasureRef, Star, Unary
+from ._expressions import Between, Binary, Call, Case, Column, Expr, FilteredAggregate, InList, IsNull, Like, Literal, MeasureRef, Unary
 from ._model import BoundModel, Field, Metric, Relationship
 from ._profile import SUPPORTED_AGGREGATES
 from .api import CompilationError, FieldFilter, Query, Scalar
@@ -11,6 +11,10 @@ class PlannedFilter:
     expression_owner: Field | Metric
     op: str
     value: Scalar
+
+@dataclass(frozen=True)
+class ComponentRef:
+    key: str
 
 @dataclass(frozen=True)
 class SafeJoinTree:
@@ -36,6 +40,8 @@ class MultiStageStage:
 @dataclass(frozen=True)
 class MultiStageQueryPlan:
     metrics: tuple[Metric, ...]
+    metric_expressions: tuple[Expr, ...]
+    lowered_expressions: tuple[tuple[str, Expr], ...]
     metric_stage_keys: tuple[str | None, ...]
     direct_stage_keys: tuple[tuple[str, str], ...]
     dimensions: tuple[Field, ...]
@@ -69,6 +75,7 @@ def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPl
         stage_inputs: list[tuple[str, str, Expr]] = []
         seen_stages: set[str] = set()
         direct_stage_keys: dict[str, str] = {}
+        lowered_expressions: dict[str, Expr] = {}
         all_metrics = tuple(dict.fromkeys((*metrics, *(metric for metric, _ in having_pairs))))
         for metric in all_metrics:
             if len(metric.roots) == 1:
@@ -79,10 +86,11 @@ def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPl
                     stage_inputs.append((key, metric.root, metric.expression))
                     seen_stages.add(key)
                 continue
-            for reference in _multistage_refs(metric.expression):
-                key = _measure_stage_key(reference)
+            lowered, components = _lower_multistage_components(metric)
+            lowered_expressions[metric.qualified_name] = lowered
+            for key, root, expression in components:
                 if key not in seen_stages:
-                    stage_inputs.append((key, reference.dataset, reference.expression))
+                    stage_inputs.append((key, root, expression))
                     seen_stages.add(key)
         stages: list[MultiStageStage] = []
         for key, root, expression in stage_inputs:
@@ -100,6 +108,8 @@ def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPl
             stages.append(MultiStageStage(key, root, expression, SafeJoinTree(root, tuple(edges))))
         return MultiStageQueryPlan(
             metrics,
+            tuple(lowered_expressions.get(metric.qualified_name, metric.expression) for metric in metrics),
+            tuple(lowered_expressions.items()),
             tuple(direct_stage_keys.get(metric.qualified_name) for metric in metrics),
             tuple(direct_stage_keys.items()),
             dimensions,
@@ -180,44 +190,103 @@ def _plan_dimension_only(
         limit,
     )
 
-def _multistage_refs(expression: Expr) -> tuple[MeasureRef, ...]:
-    found: list[MeasureRef] = []
+def _lower_multistage_components(metric: Metric) -> tuple[Expr, tuple[tuple[str, str, Expr], ...]]:
+    components: list[tuple[str, str, Expr]] = []
 
-    def visit(node: Expr) -> None:
+    def component(expression: Expr, root: str, label: str) -> ComponentRef:
+        key = f"component:{metric.qualified_name}:{label}:{len(components)}"
+        components.append((key, root, expression))
+        return ComponentRef(key)
+
+    def lower(node: Expr) -> Expr:
         if isinstance(node, MeasureRef):
-            found.append(node)
-            return
-        if isinstance(node, (Column, Star, FilteredAggregate)):
-            raise CompilationError("MULTISTAGE_UNSUPPORTED_EXPRESSION", "$.metrics", "cross-grain expression must be composed from AGG(dataset.metric) values")
-        if isinstance(node, Binary):
-            visit(node.left); visit(node.right)
-        elif isinstance(node, (Unary, IsNull)):
-            visit(node.operand)
-        elif isinstance(node, Case):
-            for condition, value in node.branches:
-                visit(condition); visit(value)
-            if node.otherwise is not None:
-                visit(node.otherwise)
-        elif isinstance(node, Between):
-            visit(node.operand); visit(node.lower); visit(node.upper)
-        elif isinstance(node, InList):
-            visit(node.operand)
-            for value in node.values:
-                visit(value)
-        elif isinstance(node, Like):
-            visit(node.operand); visit(node.pattern)
-        elif isinstance(node, Call):
+            key = _measure_stage_key(node)
+            components.append((key, node.dataset, node.expression))
+            return ComponentRef(key)
+        if isinstance(node, FilteredAggregate):
+            roots = _expression_roots(node)
+            if len(roots) != 1:
+                raise CompilationError(
+                    "MULTISTAGE_UNSUPPORTED_EXPRESSION",
+                    "$.metrics",
+                    "each aggregate component must read exactly one dataset",
+                )
+            return component(node, next(iter(roots)), "filter")
+        if isinstance(node, Call):
             if node.name in SUPPORTED_AGGREGATES:
-                raise CompilationError("MULTISTAGE_UNSUPPORTED_EXPRESSION", "$.metrics", "raw aggregates cannot be mixed with cross-grain AGG values")
-            for argument in node.args:
-                visit(argument)
-        elif not isinstance(node, Literal):
-            raise AssertionError(node)
+                roots = _expression_roots(node)
+                if len(roots) != 1:
+                    raise CompilationError(
+                        "MULTISTAGE_UNSUPPORTED_EXPRESSION",
+                        "$.metrics",
+                        "each aggregate component must read exactly one dataset",
+                    )
+                return component(node, next(iter(roots)), node.name.lower())
+            return Call(node.name, tuple(lower(argument) for argument in node.args), node.distinct)
+        if isinstance(node, Binary):
+            return Binary(node.op, lower(node.left), lower(node.right))
+        if isinstance(node, Unary):
+            return Unary(node.op, lower(node.operand))
+        if isinstance(node, IsNull):
+            return IsNull(lower(node.operand), node.negated)
+        if isinstance(node, Case):
+            return Case(tuple((lower(condition), lower(value)) for condition, value in node.branches), lower(node.otherwise) if node.otherwise is not None else None)
+        if isinstance(node, Between):
+            return Between(lower(node.operand), lower(node.lower), lower(node.upper), node.negated)
+        if isinstance(node, InList):
+            return InList(lower(node.operand), tuple(lower(value) for value in node.values), node.negated)
+        if isinstance(node, Like):
+            return Like(lower(node.operand), lower(node.pattern), node.negated)
+        if isinstance(node, (Literal,)):
+            return node
+        raise CompilationError(
+            "MULTISTAGE_UNSUPPORTED_EXPRESSION",
+            "$.metrics",
+            "cross-grain scalar expressions must be composed from aggregate components",
+        )
 
-    visit(expression)
-    if not found:
-        raise CompilationError("MULTISTAGE_UNSUPPORTED_EXPRESSION", "$.metrics", "cross-grain expression has no AGG metric references")
-    return tuple(found)
+    lowered = lower(metric.expression)
+    if not components:
+        raise CompilationError("MULTISTAGE_UNSUPPORTED_EXPRESSION", "$.metrics", "cross-grain metric has no aggregate components")
+    return lowered, tuple(components)
+
+def _expression_roots(expression: Expr) -> set[str]:
+    roots = {node.dataset for node in _walk_component(expression) if isinstance(node, Column) and node.dataset is not None}
+    return roots
+
+def _walk_component(expression: Expr):
+    if isinstance(expression, MeasureRef):
+        yield expression
+        return
+    yield expression
+    if isinstance(expression, Binary):
+        yield from _walk_component(expression.left)
+        yield from _walk_component(expression.right)
+    elif isinstance(expression, (Unary, IsNull)):
+        yield from _walk_component(expression.operand)
+    elif isinstance(expression, Case):
+        for condition, value in expression.branches:
+            yield from _walk_component(condition)
+            yield from _walk_component(value)
+        if expression.otherwise is not None:
+            yield from _walk_component(expression.otherwise)
+    elif isinstance(expression, Between):
+        yield from _walk_component(expression.operand)
+        yield from _walk_component(expression.lower)
+        yield from _walk_component(expression.upper)
+    elif isinstance(expression, InList):
+        yield from _walk_component(expression.operand)
+        for value in expression.values:
+            yield from _walk_component(value)
+    elif isinstance(expression, Like):
+        yield from _walk_component(expression.operand)
+        yield from _walk_component(expression.pattern)
+    elif isinstance(expression, Call):
+        for argument in expression.args:
+            yield from _walk_component(argument)
+    elif isinstance(expression, FilteredAggregate):
+        yield from _walk_component(expression.aggregate)
+        yield from _walk_component(expression.predicate)
 
 def _measure_stage_key(reference: MeasureRef) -> str:
     return f"measure:{reference.dataset}.{reference.metric}"

@@ -597,6 +597,49 @@ class CompilerTests(unittest.TestCase):
         self.assertIn("FROM s0 CROSS JOIN s1", result.sql)
         self.assertEqual(("orders", "customers"), result.dependencies)
 
+    def test_ossie_03_splits_raw_cross_dataset_aggregates_into_components(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {
+                "name": "revenue_per_customer",
+                "expression": {
+                    "sql": "SUM(orders.amount) / COUNT(customers.customer_id)"
+                },
+            }
+        ]
+
+        result = self.compile(
+            model,
+            Query(
+                metrics=("revenue_per_customer",),
+                dimensions=("customers.country",),
+            ),
+        )
+
+        self.assertIn("SUM(t0.`amount`) AS `value`, 1 AS `present`", result.sql)
+        self.assertIn("COUNT(t0.`customer_id`) AS `value`, 1 AS `present`", result.sql)
+        self.assertIn("FULL OUTER JOIN s1", result.sql)
+        self.assertIn("THEN NULL ELSE s0.`value` END / CASE WHEN s1.`present` IS NULL THEN 0", result.sql)
+
+    def test_ossie_03_rejects_aggregate_component_that_reads_two_datasets(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {
+                "name": "invalid",
+                "expression": {
+                    "sql": "SUM(orders.amount + customers.customer_id)"
+                },
+            }
+        ]
+
+        self.assert_error(
+            "MULTISTAGE_UNSUPPORTED_EXPRESSION",
+            model,
+            Query(metrics=("invalid",)),
+        )
+
     def test_ossie_03_plans_keyed_cross_grain_dimension_stages(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"

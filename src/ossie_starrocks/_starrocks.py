@@ -8,7 +8,7 @@ from ._expressions import Between, Binary, Call, Case, Column, Expr, FilteredAgg
 from ._model import BoundModel, Metric
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 from .api import CompilationError, CompiledQuery, OutputColumn
-from .planning import MultiStageQueryPlan, MultiStageStage, PlannedFilter, QueryPlan
+from .planning import ComponentRef, MultiStageQueryPlan, MultiStageStage, PlannedFilter, QueryPlan
 
 def render_query(model: BoundModel, plan: QueryPlan | MultiStageQueryPlan) -> CompiledQuery:
     if isinstance(plan, MultiStageQueryPlan):
@@ -85,12 +85,14 @@ def _render_multistage_query(model: BoundModel, plan: MultiStageQueryPlan) -> Co
         keys = ", ".join(f"{stage_name}.`k{index}`" for stage_name in ordered_stage_names)
         projections.append(f"COALESCE({keys}) AS `{alias}`")
         columns.append(OutputColumn(f"{field.dataset}.{field.name}", alias))
-    for index, (metric, direct_stage_key) in enumerate(zip(plan.metrics, plan.metric_stage_keys)):
+    for index, (metric, metric_expression, direct_stage_key) in enumerate(
+        zip(plan.metrics, plan.metric_expressions, plan.metric_stage_keys)
+    ):
         alias = f"m{index}"
         if direct_stage_key is not None:
             expression = _render_stage_value(direct_stage_key, stage_names, stage_by_key)
         else:
-            expression = _render_multistage_expr(metric.expression, stage_names, stage_by_key)
+            expression = _render_multistage_expr(metric_expression, stage_names, stage_by_key)
         projections.append(f"{expression} AS `{alias}`")
         columns.append(OutputColumn(metric.name, alias))
     lines = ["WITH " + ",\n".join(ctes), "SELECT " + ", ".join(projections)]
@@ -112,7 +114,13 @@ def _render_multistage_query(model: BoundModel, plan: MultiStageQueryPlan) -> Co
         lines.append(
             "WHERE "
             + " AND ".join(
-                _render_multistage_filter(item, stage_names, stage_by_key, dict(plan.direct_stage_keys))
+                _render_multistage_filter(
+                    item,
+                    stage_names,
+                    stage_by_key,
+                    dict(plan.direct_stage_keys),
+                    dict(plan.lowered_expressions),
+                )
                 for item in plan.having
             )
         )
@@ -132,13 +140,18 @@ def _render_multistage_filter(
     stages: dict[str, str],
     stage_by_key: dict[str, MultiStageStage],
     direct_stage_keys: dict[str, str],
+    lowered_expressions: dict[str, Expr] | None = None,
 ) -> str:
     assert isinstance(item.expression_owner, Metric)
     direct_key = direct_stage_keys.get(item.expression_owner.qualified_name)
     if direct_key is not None:
         left = _render_stage_value(direct_key, stages, stage_by_key)
     else:
-        left = _render_multistage_expr(item.expression_owner.expression, stages, stage_by_key)
+        expression = (lowered_expressions or {}).get(
+            item.expression_owner.qualified_name,
+            item.expression_owner.expression,
+        )
+        left = _render_multistage_expr(expression, stages, stage_by_key)
     if item.op == "is_null":
         return f"{left} IS NULL"
     if item.op == "is_not_null":
@@ -147,6 +160,8 @@ def _render_multistage_filter(
     return f"{left} {operator} {_literal(item.value)}"
 
 def _render_multistage_expr(expression: Expr, stages: dict[str, str], stage_by_key: dict[str, MultiStageStage]) -> str:
+    if isinstance(expression, ComponentRef):
+        return _render_stage_value(expression.key, stages, stage_by_key)
     if isinstance(expression, MeasureRef):
         return _render_stage_value(
             f"measure:{expression.dataset}.{expression.metric}",
