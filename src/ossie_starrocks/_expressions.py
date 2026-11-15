@@ -34,12 +34,30 @@ class Binary:
 
 
 @dataclass(frozen=True)
+class Unary:
+    op: str
+    operand: "Expr"
+
+
+@dataclass(frozen=True)
+class IsNull:
+    operand: "Expr"
+    negated: bool
+
+
+@dataclass(frozen=True)
+class Case:
+    branches: tuple[tuple["Expr", "Expr"], ...]
+    otherwise: "Expr | None"
+
+
+@dataclass(frozen=True)
 class Call:
     name: str
     args: tuple["Expr", ...]
 
 
-Expr = Column | Literal | Star | Binary | Call
+Expr = Column | Literal | Star | Binary | Unary | IsNull | Case | Call
 
 
 _TOKEN = re.compile(
@@ -47,7 +65,7 @@ _TOKEN = re.compile(
     r"(?P<number>\d+(?:\.\d+)?)|"
     r"(?P<string>'(?:''|[^'])*')|"
     r"(?P<identifier>[A-Za-z_][A-Za-z0-9_]*)|"
-    r"(?P<operator><=|>=|<>|!=|[+\-*/=<>])|"
+    r"(?P<operator><=|>=|<>|!=|[+\-*/%=<>])|"
     r"(?P<dot>\.)|(?P<comma>,)|(?P<lparen>\()|(?P<rparen>\))"
     r")"
 )
@@ -96,17 +114,47 @@ class _Parser:
         return token
 
     def expression(self, minimum_precedence: int = 0) -> Expr:
-        left = self.primary()
-        precedence = {"=": 1, "!=": 1, "<>": 1, "<": 1, "<=": 1, ">": 1, ">=": 1, "+": 2, "-": 2, "*": 3, "/": 3}
-        while self.peek()[0] == "operator":
-            op = self.peek()[1]
+        left = self.unary()
+        precedence = {"OR": 1, "AND": 2, "=": 3, "!=": 3, "<>": 3, "<": 3, "<=": 3, ">": 3, ">=": 3, "+": 4, "-": 4, "*": 5, "/": 5, "%": 5}
+        while True:
+            if self._keyword("IS"):
+                if 3 < minimum_precedence:
+                    break
+                self.take()
+                negated = False
+                if self._keyword("NOT"):
+                    self.take()
+                    negated = True
+                if not self._keyword("NULL"):
+                    raise ExpressionError("IS only supports NULL in the portable profile")
+                self.take()
+                left = IsNull(left, negated)
+                continue
+            kind, value = self.peek()
+            op = value.upper() if kind == "identifier" and value.upper() in {"AND", "OR"} else value if kind == "operator" else None
+            if op is None:
+                break
             level = precedence[op]
             if level < minimum_precedence:
                 break
-            self.take("operator")
+            self.take()
             right = self.expression(level + 1)
             left = Binary(op, left, right)
         return left
+
+    def unary(self) -> Expr:
+        kind, value = self.peek()
+        if kind == "operator" and value in {"+", "-"}:
+            self.take()
+            return Unary(value, self.unary())
+        if self._keyword("NOT"):
+            self.take()
+            return Unary("NOT", self.expression(3))
+        return self.primary()
+
+    def _keyword(self, value: str) -> bool:
+        kind, token = self.peek()
+        return kind == "identifier" and token.upper() == value
 
     def primary(self) -> Expr:
         kind, value = self.peek()
@@ -133,6 +181,25 @@ class _Parser:
             raise ExpressionError(f"unexpected token {value!r}")
         first = self.take()[1]
         keyword = first.upper()
+        if keyword == "CASE":
+            branches: list[tuple[Expr, Expr]] = []
+            while self._keyword("WHEN"):
+                self.take()
+                condition = self.expression()
+                if not self._keyword("THEN"):
+                    raise ExpressionError("CASE WHEN requires THEN")
+                self.take()
+                branches.append((condition, self.expression()))
+            if not branches:
+                raise ExpressionError("CASE requires at least one WHEN branch")
+            otherwise = None
+            if self._keyword("ELSE"):
+                self.take()
+                otherwise = self.expression()
+            if not self._keyword("END"):
+                raise ExpressionError("CASE requires END")
+            self.take()
+            return Case(tuple(branches), otherwise)
         if keyword in {"TRUE", "FALSE", "NULL"}:
             return Literal({"TRUE": True, "FALSE": False, "NULL": None}[keyword])
         if self.peek()[0] == "lparen":
@@ -162,6 +229,16 @@ def walk(expression: Expr) -> Iterable[Expr]:
     if isinstance(expression, Binary):
         yield from walk(expression.left)
         yield from walk(expression.right)
+    elif isinstance(expression, Unary):
+        yield from walk(expression.operand)
+    elif isinstance(expression, IsNull):
+        yield from walk(expression.operand)
+    elif isinstance(expression, Case):
+        for condition, value in expression.branches:
+            yield from walk(condition)
+            yield from walk(value)
+        if expression.otherwise is not None:
+            yield from walk(expression.otherwise)
     elif isinstance(expression, Call):
         for argument in expression.args:
             yield from walk(argument)

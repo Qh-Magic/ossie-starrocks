@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from ._expressions import Binary, Call, Column, Expr, Literal as ExprLiteral, Star
+from ._expressions import Binary, Call, Case, Column, Expr, IsNull, Literal as ExprLiteral, Star, Unary
 from ._model import BoundModel
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 from .api import CompilationError, CompiledQuery, OutputColumn
@@ -53,6 +53,19 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
         return "*"
     if isinstance(expression, Binary):
         return f"({_render_expr(expression.left, aliases)} {expression.op} {_render_expr(expression.right, aliases)})"
+    if isinstance(expression, Unary):
+        separator = " " if expression.op == "NOT" else ""
+        return f"({expression.op}{separator}{_render_expr(expression.operand, aliases)})"
+    if isinstance(expression, IsNull):
+        suffix = "IS NOT NULL" if expression.negated else "IS NULL"
+        return f"({_render_expr(expression.operand, aliases)} {suffix})"
+    if isinstance(expression, Case):
+        branches = " ".join(
+            f"WHEN {_render_expr(condition, aliases)} THEN {_render_expr(value, aliases)}"
+            for condition, value in expression.branches
+        )
+        otherwise = f" ELSE {_render_expr(expression.otherwise, aliases)}" if expression.otherwise is not None else ""
+        return f"CASE {branches}{otherwise} END"
     if isinstance(expression, Call):
         if expression.name not in SUPPORTED_AGGREGATES and expression.name not in SUPPORTED_SCALAR_FUNCTIONS:
             raise CompilationError("UNSUPPORTED_EXPRESSION", "$.expression", f"unsupported function {expression.name}")

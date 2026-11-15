@@ -6,7 +6,7 @@ import re
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from ._expressions import Binary, Call, Column, Expr, ExpressionError, Star, contains_call, parse, walk
+from ._expressions import Binary, Call, Case, Column, Expr, ExpressionError, IsNull, Star, Unary, contains_call, parse, walk
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 
 
@@ -259,9 +259,17 @@ def _validate_aggregate_shape(expression: Expr, location: str) -> None:
             raise ModelError("INVALID_METRIC_EXPRESSION", location, "ungrouped field outside aggregate")
         elif isinstance(node, Star):
             raise ModelError("INVALID_METRIC_EXPRESSION", location, "* must be the direct argument of COUNT")
-        elif hasattr(node, "left"):
-            visit(node.left, inside_aggregate)  # type: ignore[attr-defined]
-            visit(node.right, inside_aggregate)  # type: ignore[attr-defined]
+        elif isinstance(node, Binary):
+            visit(node.left, inside_aggregate)
+            visit(node.right, inside_aggregate)
+        elif isinstance(node, (Unary, IsNull)):
+            visit(node.operand, inside_aggregate)
+        elif isinstance(node, Case):
+            for condition, value in node.branches:
+                visit(condition, inside_aggregate)
+                visit(value, inside_aggregate)
+            if node.otherwise is not None:
+                visit(node.otherwise, inside_aggregate)
 
     visit(expression, False)
 
@@ -306,6 +314,12 @@ def _expand_fields(fields: list[Field], field_by_name: Mapping[str, Field]) -> t
             return expression
         if isinstance(expression, Binary):
             return Binary(expression.op, expand_expression(expression.left, stack, owner), expand_expression(expression.right, stack, owner))
+        if isinstance(expression, Unary):
+            return Unary(expression.op, expand_expression(expression.operand, stack, owner))
+        if isinstance(expression, IsNull):
+            return IsNull(expand_expression(expression.operand, stack, owner), expression.negated)
+        if isinstance(expression, Case):
+            return Case(tuple((expand_expression(condition, stack, owner), expand_expression(value, stack, owner)) for condition, value in expression.branches), expand_expression(expression.otherwise, stack, owner) if expression.otherwise is not None else None)
         if isinstance(expression, Call):
             return Call(expression.name, tuple(expand_expression(argument, stack, owner) for argument in expression.args))
         return expression
@@ -328,6 +342,12 @@ def _expand_expression(expression: Expr, field_by_name: Mapping[str, Field], sta
         return _expand_expression(field.expression, field_by_name, (*stack, key), key)
     if isinstance(expression, Binary):
         return Binary(expression.op, _expand_expression(expression.left, field_by_name, stack, owner), _expand_expression(expression.right, field_by_name, stack, owner))
+    if isinstance(expression, Unary):
+        return Unary(expression.op, _expand_expression(expression.operand, field_by_name, stack, owner))
+    if isinstance(expression, IsNull):
+        return IsNull(_expand_expression(expression.operand, field_by_name, stack, owner), expression.negated)
+    if isinstance(expression, Case):
+        return Case(tuple((_expand_expression(condition, field_by_name, stack, owner), _expand_expression(value, field_by_name, stack, owner)) for condition, value in expression.branches), _expand_expression(expression.otherwise, field_by_name, stack, owner) if expression.otherwise is not None else None)
     if isinstance(expression, Call):
         return Call(expression.name, tuple(_expand_expression(argument, field_by_name, stack, owner) for argument in expression.args))
     return expression
@@ -367,6 +387,21 @@ def _resolve_03_metric_expression(
             expression.op,
             _resolve_03_metric_expression(expression.left, declared_root, datasets, fields, location),
             _resolve_03_metric_expression(expression.right, declared_root, datasets, fields, location),
+        )
+    if isinstance(expression, Unary):
+        return Unary(expression.op, _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, location))
+    if isinstance(expression, IsNull):
+        return IsNull(_resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, location), expression.negated)
+    if isinstance(expression, Case):
+        return Case(
+            tuple(
+                (
+                    _resolve_03_metric_expression(condition, declared_root, datasets, fields, location),
+                    _resolve_03_metric_expression(value, declared_root, datasets, fields, location),
+                )
+                for condition, value in expression.branches
+            ),
+            _resolve_03_metric_expression(expression.otherwise, declared_root, datasets, fields, location) if expression.otherwise is not None else None,
         )
     if isinstance(expression, Call):
         return Call(
@@ -512,7 +547,7 @@ def _reject_unknown(raw: Mapping[str, Any], allowed: set[str], location: str) ->
 
 
 def _scope_expression(expression: Expr, default_dataset: str | None, datasets: set[str]) -> Expr:
-    from ._expressions import Binary, Call, Literal, Star
+    from ._expressions import Literal
 
     if isinstance(expression, Column):
         dataset = expression.dataset or default_dataset
@@ -521,6 +556,12 @@ def _scope_expression(expression: Expr, default_dataset: str | None, datasets: s
         return Column(dataset, expression.name)
     if isinstance(expression, Binary):
         return Binary(expression.op, _scope_expression(expression.left, default_dataset, datasets), _scope_expression(expression.right, default_dataset, datasets))
+    if isinstance(expression, Unary):
+        return Unary(expression.op, _scope_expression(expression.operand, default_dataset, datasets))
+    if isinstance(expression, IsNull):
+        return IsNull(_scope_expression(expression.operand, default_dataset, datasets), expression.negated)
+    if isinstance(expression, Case):
+        return Case(tuple((_scope_expression(condition, default_dataset, datasets), _scope_expression(value, default_dataset, datasets)) for condition, value in expression.branches), _scope_expression(expression.otherwise, default_dataset, datasets) if expression.otherwise is not None else None)
     if isinstance(expression, Call):
         return Call(expression.name, tuple(_scope_expression(argument, default_dataset, datasets) for argument in expression.args))
     if isinstance(expression, (Literal, Star)):

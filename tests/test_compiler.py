@@ -292,6 +292,67 @@ class CompilerTests(unittest.TestCase):
 
         self.assert_error("UNSUPPORTED_EXPRESSION", model)
 
+    def test_ossie_03_compiles_conditional_aggregation(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"][0]["expression"] = {
+            "sql": (
+                "SUM(CASE WHEN orders.status = 'complete' AND orders.amount IS NOT NULL "
+                "THEN -orders.amount % 10 ELSE 0 END)"
+            )
+        }
+
+        result = self.compile(model, Query(metrics=("revenue",)))
+
+        self.assertIn(
+            "SUM(CASE WHEN ((t0.`status` = 'complete') AND (t0.`amount` IS NOT NULL)) "
+            "THEN ((-t0.`amount`) % 10) ELSE 0 END)",
+            result.sql,
+        )
+
+    def test_ossie_03_compiles_case_field_with_null_predicate(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].append(
+            {
+                "name": "status_bucket",
+                "expression": {
+                    "sql": "CASE WHEN raw_status IS NULL OR raw_status = '' THEN 'unknown' ELSE raw_status END"
+                },
+            }
+        )
+
+        result = self.compile(
+            model,
+            Query(metrics=("revenue",), dimensions=("orders.status_bucket",)),
+        )
+
+        self.assertIn(
+            "CASE WHEN ((t0.`raw_status` IS NULL) OR (t0.`raw_status` = '')) "
+            "THEN 'unknown' ELSE t0.`raw_status` END",
+            result.sql,
+        )
+
+    def test_ossie_03_predicate_precedence_is_preserved(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].append(
+            {
+                "name": "flag",
+                "expression": {
+                    "sql": "CASE WHEN NOT raw_status = 'closed' AND (amount + 1) IS NOT NULL THEN 1 ELSE 0 END"
+                },
+            }
+        )
+
+        result = self.compile(model, Query(metrics=("revenue",), dimensions=("orders.flag",)))
+
+        self.assertIn(
+            "CASE WHEN ((NOT (t0.`raw_status` = 'closed')) AND ((t0.`amount` + 1) IS NOT NULL)) "
+            "THEN 1 ELSE 0 END",
+            result.sql,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

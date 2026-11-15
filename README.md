@@ -76,6 +76,7 @@ The current release accepts the following model and query features.
 - `SUM`, `COUNT`, `MIN`, `MAX`, and `AVG` aggregates.
 - Direct StarRocks lowering for a verified OSSIE SQL scalar subset: case/trim/length and substring functions, basic numeric functions, date-part extraction, and `DATE_TRUNC`.
 - Arithmetic above aggregate expressions.
+- Structured predicates and conditional expressions: comparisons, `AND`, `OR`, `NOT`, `IS [NOT] NULL`, searched `CASE WHEN`, unary signs, and modulo.
 - Relationships whose target columns match a declared primary key or unique key.
 - Queries with one metric grain, dimensions, field filters, metric filters, and a limit.
 - `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `is_null`, and `is_not_null` filters.
