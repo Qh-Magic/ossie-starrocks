@@ -104,7 +104,8 @@ def _render_multistage_query(model: BoundModel, plan: MultiStageQueryPlan) -> Co
         for stage_name in ordered_stage_names[1:]:
             conditions = []
             for index in range(len(plan.dimensions)):
-                prior = f"COALESCE({', '.join(f'{name}.`k{index}`' for name in joined)})"
+                prior_keys = [f"{name}.`k{index}`" for name in joined]
+                prior = prior_keys[0] if len(prior_keys) == 1 else f"COALESCE({', '.join(prior_keys)})"
                 current = f"{stage_name}.`k{index}`"
                 conditions.append(f"({prior} = {current} OR ({prior} IS NULL AND {current} IS NULL))")
             from_clause += f"\nFULL OUTER JOIN {stage_name} ON " + " AND ".join(conditions)

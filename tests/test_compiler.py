@@ -522,6 +522,11 @@ class CompilerTests(unittest.TestCase):
 
         self.assertIn('COALESCE(CASE WHEN s0."present" IS NULL', result.sql)
         self.assertIn('FULL OUTER JOIN s1', result.sql)
+        self.assertIn(
+            '(s0."k0" = s1."k0" OR (s0."k0" IS NULL AND s1."k0" IS NULL))',
+            result.sql,
+        )
+        self.assertNotIn('COALESCE(s0."k0")', result.sql)
         self.assertNotIn("IFNULL", result.sql)
         self.assertNotIn("`", result.sql)
 
