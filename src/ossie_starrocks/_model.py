@@ -6,7 +6,7 @@ import re
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from ._expressions import Binary, Call, Case, Column, Expr, ExpressionError, IsNull, Star, Unary, contains_call, parse, walk
+from ._expressions import Between, Binary, Call, Case, Column, Expr, ExpressionError, InList, IsNull, Like, Star, Unary, contains_call, parse, walk
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 
 
@@ -270,6 +270,17 @@ def _validate_aggregate_shape(expression: Expr, location: str) -> None:
                 visit(value, inside_aggregate)
             if node.otherwise is not None:
                 visit(node.otherwise, inside_aggregate)
+        elif isinstance(node, Between):
+            visit(node.operand, inside_aggregate)
+            visit(node.lower, inside_aggregate)
+            visit(node.upper, inside_aggregate)
+        elif isinstance(node, InList):
+            visit(node.operand, inside_aggregate)
+            for value in node.values:
+                visit(value, inside_aggregate)
+        elif isinstance(node, Like):
+            visit(node.operand, inside_aggregate)
+            visit(node.pattern, inside_aggregate)
 
     visit(expression, False)
 
@@ -320,6 +331,12 @@ def _expand_fields(fields: list[Field], field_by_name: Mapping[str, Field]) -> t
             return IsNull(expand_expression(expression.operand, stack, owner), expression.negated)
         if isinstance(expression, Case):
             return Case(tuple((expand_expression(condition, stack, owner), expand_expression(value, stack, owner)) for condition, value in expression.branches), expand_expression(expression.otherwise, stack, owner) if expression.otherwise is not None else None)
+        if isinstance(expression, Between):
+            return Between(expand_expression(expression.operand, stack, owner), expand_expression(expression.lower, stack, owner), expand_expression(expression.upper, stack, owner), expression.negated)
+        if isinstance(expression, InList):
+            return InList(expand_expression(expression.operand, stack, owner), tuple(expand_expression(value, stack, owner) for value in expression.values), expression.negated)
+        if isinstance(expression, Like):
+            return Like(expand_expression(expression.operand, stack, owner), expand_expression(expression.pattern, stack, owner), expression.negated)
         if isinstance(expression, Call):
             return Call(expression.name, tuple(expand_expression(argument, stack, owner) for argument in expression.args))
         return expression
@@ -348,6 +365,12 @@ def _expand_expression(expression: Expr, field_by_name: Mapping[str, Field], sta
         return IsNull(_expand_expression(expression.operand, field_by_name, stack, owner), expression.negated)
     if isinstance(expression, Case):
         return Case(tuple((_expand_expression(condition, field_by_name, stack, owner), _expand_expression(value, field_by_name, stack, owner)) for condition, value in expression.branches), _expand_expression(expression.otherwise, field_by_name, stack, owner) if expression.otherwise is not None else None)
+    if isinstance(expression, Between):
+        return Between(_expand_expression(expression.operand, field_by_name, stack, owner), _expand_expression(expression.lower, field_by_name, stack, owner), _expand_expression(expression.upper, field_by_name, stack, owner), expression.negated)
+    if isinstance(expression, InList):
+        return InList(_expand_expression(expression.operand, field_by_name, stack, owner), tuple(_expand_expression(value, field_by_name, stack, owner) for value in expression.values), expression.negated)
+    if isinstance(expression, Like):
+        return Like(_expand_expression(expression.operand, field_by_name, stack, owner), _expand_expression(expression.pattern, field_by_name, stack, owner), expression.negated)
     if isinstance(expression, Call):
         return Call(expression.name, tuple(_expand_expression(argument, field_by_name, stack, owner) for argument in expression.args))
     return expression
@@ -402,6 +425,25 @@ def _resolve_03_metric_expression(
                 for condition, value in expression.branches
             ),
             _resolve_03_metric_expression(expression.otherwise, declared_root, datasets, fields, location) if expression.otherwise is not None else None,
+        )
+    if isinstance(expression, Between):
+        return Between(
+            _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, location),
+            _resolve_03_metric_expression(expression.lower, declared_root, datasets, fields, location),
+            _resolve_03_metric_expression(expression.upper, declared_root, datasets, fields, location),
+            expression.negated,
+        )
+    if isinstance(expression, InList):
+        return InList(
+            _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, location),
+            tuple(_resolve_03_metric_expression(value, declared_root, datasets, fields, location) for value in expression.values),
+            expression.negated,
+        )
+    if isinstance(expression, Like):
+        return Like(
+            _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, location),
+            _resolve_03_metric_expression(expression.pattern, declared_root, datasets, fields, location),
+            expression.negated,
         )
     if isinstance(expression, Call):
         return Call(
@@ -562,6 +604,12 @@ def _scope_expression(expression: Expr, default_dataset: str | None, datasets: s
         return IsNull(_scope_expression(expression.operand, default_dataset, datasets), expression.negated)
     if isinstance(expression, Case):
         return Case(tuple((_scope_expression(condition, default_dataset, datasets), _scope_expression(value, default_dataset, datasets)) for condition, value in expression.branches), _scope_expression(expression.otherwise, default_dataset, datasets) if expression.otherwise is not None else None)
+    if isinstance(expression, Between):
+        return Between(_scope_expression(expression.operand, default_dataset, datasets), _scope_expression(expression.lower, default_dataset, datasets), _scope_expression(expression.upper, default_dataset, datasets), expression.negated)
+    if isinstance(expression, InList):
+        return InList(_scope_expression(expression.operand, default_dataset, datasets), tuple(_scope_expression(value, default_dataset, datasets) for value in expression.values), expression.negated)
+    if isinstance(expression, Like):
+        return Like(_scope_expression(expression.operand, default_dataset, datasets), _scope_expression(expression.pattern, default_dataset, datasets), expression.negated)
     if isinstance(expression, Call):
         return Call(expression.name, tuple(_scope_expression(argument, default_dataset, datasets) for argument in expression.args))
     if isinstance(expression, (Literal, Star)):

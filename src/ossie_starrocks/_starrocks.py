@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from ._expressions import Binary, Call, Case, Column, Expr, IsNull, Literal as ExprLiteral, Star, Unary
+from ._expressions import Between, Binary, Call, Case, Column, Expr, InList, IsNull, Like, Literal as ExprLiteral, Star, Unary
 from ._model import BoundModel
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 from .api import CompilationError, CompiledQuery, OutputColumn
@@ -66,6 +66,16 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
         )
         otherwise = f" ELSE {_render_expr(expression.otherwise, aliases)}" if expression.otherwise is not None else ""
         return f"CASE {branches}{otherwise} END"
+    if isinstance(expression, Between):
+        operator = "NOT BETWEEN" if expression.negated else "BETWEEN"
+        return f"({_render_expr(expression.operand, aliases)} {operator} {_render_expr(expression.lower, aliases)} AND {_render_expr(expression.upper, aliases)})"
+    if isinstance(expression, InList):
+        operator = "NOT IN" if expression.negated else "IN"
+        values = ", ".join(_render_expr(value, aliases) for value in expression.values)
+        return f"({_render_expr(expression.operand, aliases)} {operator} ({values}))"
+    if isinstance(expression, Like):
+        operator = "NOT LIKE" if expression.negated else "LIKE"
+        return f"({_render_expr(expression.operand, aliases)} {operator} {_render_expr(expression.pattern, aliases)})"
     if isinstance(expression, Call):
         if expression.name not in SUPPORTED_AGGREGATES and expression.name not in SUPPORTED_SCALAR_FUNCTIONS:
             raise CompilationError("UNSUPPORTED_EXPRESSION", "$.expression", f"unsupported function {expression.name}")

@@ -52,12 +52,34 @@ class Case:
 
 
 @dataclass(frozen=True)
+class Between:
+    operand: "Expr"
+    lower: "Expr"
+    upper: "Expr"
+    negated: bool
+
+
+@dataclass(frozen=True)
+class InList:
+    operand: "Expr"
+    values: tuple["Expr", ...]
+    negated: bool
+
+
+@dataclass(frozen=True)
+class Like:
+    operand: "Expr"
+    pattern: "Expr"
+    negated: bool
+
+
+@dataclass(frozen=True)
 class Call:
     name: str
     args: tuple["Expr", ...]
 
 
-Expr = Column | Literal | Star | Binary | Unary | IsNull | Case | Call
+Expr = Column | Literal | Star | Binary | Unary | IsNull | Case | Between | InList | Like | Call
 
 
 _TOKEN = re.compile(
@@ -130,6 +152,36 @@ class _Parser:
                 self.take()
                 left = IsNull(left, negated)
                 continue
+            negated_predicate = self._keyword("NOT") and self._next_keyword_in({"IN", "BETWEEN", "LIKE"})
+            predicate = self.tokens[self.position + 1][1].upper() if negated_predicate else self.peek()[1].upper()
+            if predicate in {"IN", "BETWEEN", "LIKE"} and (self.peek()[0] == "identifier"):
+                if 3 < minimum_precedence:
+                    break
+                if negated_predicate:
+                    self.take()
+                self.take()
+                if predicate == "IN":
+                    self.take("lparen")
+                    values: list[Expr] = []
+                    if self.peek()[0] == "rparen":
+                        raise ExpressionError("IN requires at least one value")
+                    while True:
+                        values.append(self.expression())
+                        if self.peek()[0] != "comma":
+                            break
+                        self.take()
+                    self.take("rparen")
+                    left = InList(left, tuple(values), negated_predicate)
+                elif predicate == "BETWEEN":
+                    lower = self.expression(4)
+                    if not self._keyword("AND"):
+                        raise ExpressionError("BETWEEN requires AND")
+                    self.take()
+                    upper = self.expression(4)
+                    left = Between(left, lower, upper, negated_predicate)
+                else:
+                    left = Like(left, self.expression(4), negated_predicate)
+                continue
             kind, value = self.peek()
             op = value.upper() if kind == "identifier" and value.upper() in {"AND", "OR"} else value if kind == "operator" else None
             if op is None:
@@ -155,6 +207,12 @@ class _Parser:
     def _keyword(self, value: str) -> bool:
         kind, token = self.peek()
         return kind == "identifier" and token.upper() == value
+
+    def _next_keyword_in(self, values: set[str]) -> bool:
+        if self.position + 1 >= len(self.tokens):
+            return False
+        kind, token = self.tokens[self.position + 1]
+        return kind == "identifier" and token.upper() in values
 
     def primary(self) -> Expr:
         kind, value = self.peek()
@@ -239,6 +297,17 @@ def walk(expression: Expr) -> Iterable[Expr]:
             yield from walk(value)
         if expression.otherwise is not None:
             yield from walk(expression.otherwise)
+    elif isinstance(expression, Between):
+        yield from walk(expression.operand)
+        yield from walk(expression.lower)
+        yield from walk(expression.upper)
+    elif isinstance(expression, InList):
+        yield from walk(expression.operand)
+        for value in expression.values:
+            yield from walk(value)
+    elif isinstance(expression, Like):
+        yield from walk(expression.operand)
+        yield from walk(expression.pattern)
     elif isinstance(expression, Call):
         for argument in expression.args:
             yield from walk(argument)

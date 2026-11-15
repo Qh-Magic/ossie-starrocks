@@ -353,6 +353,41 @@ class CompilerTests(unittest.TestCase):
             result.sql,
         )
 
+    def test_ossie_03_compiles_list_range_and_pattern_predicates(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].append(
+            {
+                "name": "segment",
+                "expression": {
+                    "sql": (
+                        "CASE WHEN raw_status IN ('new', 'open') AND amount BETWEEN 10 AND 100 "
+                        "AND customer_name LIKE 'A%' THEN 'target' "
+                        "WHEN raw_status NOT IN ('closed') OR amount NOT BETWEEN 0 AND 1000 "
+                        "OR customer_name NOT LIKE '%test%' THEN 'other' ELSE 'excluded' END"
+                    )
+                },
+            }
+        )
+
+        result = self.compile(model, Query(metrics=("revenue",), dimensions=("orders.segment",)))
+
+        self.assertIn("t0.`raw_status` IN ('new', 'open')", result.sql)
+        self.assertIn("t0.`amount` BETWEEN 10 AND 100", result.sql)
+        self.assertIn("t0.`customer_name` LIKE 'A%'", result.sql)
+        self.assertIn("t0.`raw_status` NOT IN ('closed')", result.sql)
+        self.assertIn("t0.`amount` NOT BETWEEN 0 AND 1000", result.sql)
+        self.assertIn("t0.`customer_name` NOT LIKE '%test%'", result.sql)
+
+    def test_ossie_03_rejects_empty_in_list(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].append(
+            {"name": "bad", "expression": {"sql": "raw_status IN ()"}}
+        )
+
+        self.assert_error("UNSUPPORTED_EXPRESSION", model)
+
 
 if __name__ == "__main__":
     unittest.main()
