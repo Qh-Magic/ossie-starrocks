@@ -20,8 +20,13 @@ def sql(statement: str) -> tuple[tuple[str, ...], ...]:
         input=statement,
         text=True,
         capture_output=True,
-        check=True,
+        check=False,
     )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"StarRocks command failed ({completed.returncode})\n"
+            f"SQL:\n{statement}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
     rows = []
     for line in completed.stdout.splitlines():
         rows.append(tuple(line.split("\t")))
