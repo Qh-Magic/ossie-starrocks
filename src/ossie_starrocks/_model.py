@@ -168,7 +168,8 @@ def bind_model(raw: dict[str, Any]) -> BoundModel:
 
     metrics: list[Metric] = []
     for raw_metric, root, location in dataset_metrics:
-        metrics.append(_bind_metric(raw_metric, location, root, dataset_by_name, field_by_name, version))
+        metrics.append(_bind_metric(raw_metric, location, root, dataset_by_name, field_by_name, version, {}))
+    dataset_metric_by_name = {metric.qualified_name: metric for metric in metrics}
     raw_root_metrics = raw.get("metrics", [])
     if not isinstance(raw_root_metrics, list):
         raise ModelError("INVALID_MODEL", "$.metrics", "metrics must be an array")
@@ -176,7 +177,7 @@ def bind_model(raw: dict[str, Any]) -> BoundModel:
         location = f"$.metrics[{metric_index}]"
         if not isinstance(raw_metric, dict):
             raise ModelError("INVALID_MODEL", location, "metric must be an object")
-        metrics.append(_bind_metric(raw_metric, location, None, dataset_by_name, field_by_name, version))
+        metrics.append(_bind_metric(raw_metric, location, None, dataset_by_name, field_by_name, version, dataset_metric_by_name))
     dataset_metric_names = {metric.qualified_name for metric in metrics if metric.qualified_name != metric.name}
     collision = sorted(dataset_metric_names & set(field_by_name))
     if collision:
@@ -203,16 +204,24 @@ def bind_model(raw: dict[str, Any]) -> BoundModel:
     )
 
 
-def _bind_metric(raw: dict[str, Any], location: str, declared_root: str | None, datasets: Mapping[str, Dataset], fields: Mapping[str, Field], version: str) -> Metric:
+def _bind_metric(
+    raw: dict[str, Any],
+    location: str,
+    declared_root: str | None,
+    datasets: Mapping[str, Dataset],
+    fields: Mapping[str, Field],
+    version: str,
+    dataset_metrics: Mapping[str, Metric],
+) -> Metric:
     name = _required_identifier(raw, "name", f"{location}.name")
     expression = _parse_expression(raw.get("expression"), location)
-    if not contains_call(expression, SUPPORTED_AGGREGATES):
-        raise ModelError("INVALID_METRIC_EXPRESSION", location, "metric must contain an aggregate")
     if version == "0.3.0.dev0":
-        expression = _resolve_03_metric_expression(expression, declared_root, datasets, fields, location)
+        expression = _resolve_03_metric_expression(expression, declared_root, datasets, fields, dataset_metrics, location)
     else:
         expression = _scope_expression(expression, declared_root, set(datasets))
         expression = _expand_expression(expression, fields, (), None)
+    if not contains_call(expression, SUPPORTED_AGGREGATES):
+        raise ModelError("INVALID_METRIC_EXPRESSION", location, "metric must contain an aggregate")
     _validate_aggregate_shape(expression, location)
     roots = {node.dataset for node in walk(expression) if isinstance(node, Column)}
     if None in roots:
@@ -400,6 +409,7 @@ def _resolve_03_metric_expression(
     declared_root: str | None,
     datasets: Mapping[str, Dataset],
     fields: Mapping[str, Field],
+    dataset_metrics: Mapping[str, Metric],
     location: str,
 ) -> Expr:
     """Resolve 0.3 metric names according to dataset/model metric scope."""
@@ -427,53 +437,65 @@ def _resolve_03_metric_expression(
     if isinstance(expression, Binary):
         return Binary(
             expression.op,
-            _resolve_03_metric_expression(expression.left, declared_root, datasets, fields, location),
-            _resolve_03_metric_expression(expression.right, declared_root, datasets, fields, location),
+            _resolve_03_metric_expression(expression.left, declared_root, datasets, fields, dataset_metrics, location),
+            _resolve_03_metric_expression(expression.right, declared_root, datasets, fields, dataset_metrics, location),
         )
     if isinstance(expression, Unary):
-        return Unary(expression.op, _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, location))
+        return Unary(expression.op, _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, dataset_metrics, location))
     if isinstance(expression, IsNull):
-        return IsNull(_resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, location), expression.negated)
+        return IsNull(_resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, dataset_metrics, location), expression.negated)
     if isinstance(expression, Case):
         return Case(
             tuple(
                 (
-                    _resolve_03_metric_expression(condition, declared_root, datasets, fields, location),
-                    _resolve_03_metric_expression(value, declared_root, datasets, fields, location),
+                    _resolve_03_metric_expression(condition, declared_root, datasets, fields, dataset_metrics, location),
+                    _resolve_03_metric_expression(value, declared_root, datasets, fields, dataset_metrics, location),
                 )
                 for condition, value in expression.branches
             ),
-            _resolve_03_metric_expression(expression.otherwise, declared_root, datasets, fields, location) if expression.otherwise is not None else None,
+            _resolve_03_metric_expression(expression.otherwise, declared_root, datasets, fields, dataset_metrics, location) if expression.otherwise is not None else None,
         )
     if isinstance(expression, Between):
         return Between(
-            _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, location),
-            _resolve_03_metric_expression(expression.lower, declared_root, datasets, fields, location),
-            _resolve_03_metric_expression(expression.upper, declared_root, datasets, fields, location),
+            _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, dataset_metrics, location),
+            _resolve_03_metric_expression(expression.lower, declared_root, datasets, fields, dataset_metrics, location),
+            _resolve_03_metric_expression(expression.upper, declared_root, datasets, fields, dataset_metrics, location),
             expression.negated,
         )
     if isinstance(expression, InList):
         return InList(
-            _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, location),
-            tuple(_resolve_03_metric_expression(value, declared_root, datasets, fields, location) for value in expression.values),
+            _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, dataset_metrics, location),
+            tuple(_resolve_03_metric_expression(value, declared_root, datasets, fields, dataset_metrics, location) for value in expression.values),
             expression.negated,
         )
     if isinstance(expression, Like):
         return Like(
-            _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, location),
-            _resolve_03_metric_expression(expression.pattern, declared_root, datasets, fields, location),
+            _resolve_03_metric_expression(expression.operand, declared_root, datasets, fields, dataset_metrics, location),
+            _resolve_03_metric_expression(expression.pattern, declared_root, datasets, fields, dataset_metrics, location),
             expression.negated,
         )
     if isinstance(expression, Call):
+        if expression.name == "AGG":
+            if declared_root is not None:
+                raise ModelError("INVALID_METRIC_EXPRESSION", location, "AGG is only valid in a model-scoped metric")
+            if expression.distinct or len(expression.args) != 1 or not isinstance(expression.args[0], Column):
+                raise ModelError("INVALID_METRIC_EXPRESSION", location, "AGG requires one dataset.metric reference")
+            reference = expression.args[0]
+            if reference.dataset is None:
+                raise ModelError("INVALID_METRIC_EXPRESSION", location, "AGG metric reference must be dataset-qualified")
+            metric = dataset_metrics.get(f"{reference.dataset}.{reference.name}")
+            if metric is None:
+                raise ModelError("UNKNOWN_METRIC", location, f"unknown dataset metric {reference.dataset}.{reference.name}")
+            return metric.expression
         return Call(
             expression.name,
-            tuple(_resolve_03_metric_expression(argument, declared_root, datasets, fields, location) for argument in expression.args),
+            tuple(_resolve_03_metric_expression(argument, declared_root, datasets, fields, dataset_metrics, location) for argument in expression.args),
             expression.distinct,
         )
     if isinstance(expression, FilteredAggregate):
-        aggregate = _resolve_03_metric_expression(expression.aggregate, declared_root, datasets, fields, location)
+        aggregate = _resolve_03_metric_expression(expression.aggregate, declared_root, datasets, fields, dataset_metrics, location)
         assert isinstance(aggregate, Call)
-        return FilteredAggregate(aggregate, _resolve_03_metric_expression(expression.predicate, declared_root, datasets, fields, location))
+        return FilteredAggregate(aggregate, _resolve_03_metric_expression(expression.predicate, declared_root, datasets, fields, dataset_metrics, location))
     return expression
 
 

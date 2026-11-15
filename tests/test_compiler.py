@@ -447,6 +447,56 @@ class CompilerTests(unittest.TestCase):
 
         self.assert_error("INVALID_METRIC_EXPRESSION", model)
 
+    def test_ossie_03_evaluates_same_grain_dataset_metrics_with_agg(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["metrics"] = [
+            {"name": "gross_revenue", "expression": {"sql": "SUM(amount)"}},
+            {"name": "orders_count", "expression": {"sql": "COUNT(customer_id)"}},
+        ]
+        model["metrics"] = [
+            {
+                "name": "average_order_value",
+                "expression": {
+                    "sql": "AGG(orders.gross_revenue) / AGG(orders.orders_count)"
+                },
+            }
+        ]
+
+        result = self.compile(model, Query(metrics=("average_order_value",)))
+
+        self.assertIn("(SUM(t0.`amount`) / COUNT(t0.`customer_id`))", result.sql)
+        self.assertNotIn("AGG(", result.sql)
+
+    def test_ossie_03_rejects_cross_grain_agg_until_multistage_planning(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["metrics"] = [
+            {"name": "orders_count", "expression": {"sql": "COUNT(customer_id)"}}
+        ]
+        model["datasets"][1]["metrics"] = [
+            {"name": "customers_count", "expression": {"sql": "COUNT(customer_id)"}}
+        ]
+        model["metrics"] = [
+            {
+                "name": "ratio",
+                "expression": {
+                    "sql": "AGG(orders.orders_count) / AGG(customers.customers_count)"
+                },
+            }
+        ]
+
+        self.assert_error("MIXED_GRAIN", model)
+
+    def test_ossie_03_rejects_agg_of_a_field(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {"name": "invalid", "expression": {"sql": "AGG(orders.amount)"}}
+        ]
+
+        self.assert_error("UNKNOWN_METRIC", model)
+
 
 if __name__ == "__main__":
     unittest.main()
