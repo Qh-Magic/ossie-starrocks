@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from ._expressions import Between, Binary, Call, Case, Column, Expr, FilteredAggregate, InList, IsNull, Like, Literal, MeasureRef, Unary
+from ._expressions import Between, Binary, Call, Case, Column, Expr, ExpressionError, FilteredAggregate, InList, IsNull, Like, Literal, MeasureRef, Star, Unary, parse
 from ._model import BoundModel, Field, Metric, Relationship
-from ._profile import SUPPORTED_AGGREGATES
-from .api import CompilationError, FieldFilter, Query, Scalar
+from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
+from .api import CompilationError, Query, Scalar
 
 @dataclass(frozen=True)
 class PlannedFilter:
     expression_owner: Field | Metric
     op: str
     value: Scalar
+
+@dataclass(frozen=True)
+class PlannedExpressionFilter:
+    expression: Expr
+    dataset: str | None
+
+QueryFilter = PlannedFilter | PlannedExpressionFilter
 
 @dataclass(frozen=True)
 class ComponentRef:
@@ -26,7 +33,7 @@ class QueryPlan:
     joins: SafeJoinTree
     metrics: tuple[Metric, ...]
     dimensions: tuple[Field, ...]
-    where: tuple[PlannedFilter, ...]
+    where: tuple[QueryFilter, ...]
     having: tuple[PlannedFilter, ...]
     limit: int | None
 
@@ -46,7 +53,7 @@ class MultiStageQueryPlan:
     direct_stage_keys: tuple[tuple[str, str], ...]
     dimensions: tuple[Field, ...]
     stages: tuple[MultiStageStage, ...]
-    where: tuple[PlannedFilter, ...]
+    where: tuple[QueryFilter, ...]
     having: tuple[PlannedFilter, ...]
     limit: int | None
 
@@ -58,12 +65,17 @@ def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPl
     dimensions = tuple(_field(model, name, f"$.dimensions[{i}]") for i, name in enumerate(query.dimensions))
     where_pairs = tuple((_field(model, item.field, f"$.where[{i}].field"), item) for i, item in enumerate(query.where))
     _validate_filters(query)
+    expression_filter = _bind_query_filter(model, query.filter) if query.filter is not None else None
+    where = (
+        *(PlannedFilter(field, item.op, item.value) for field, item in where_pairs),
+        *((expression_filter,) if expression_filter is not None else ()),
+    )
     if query.limit is not None and (type(query.limit) is not int or not 0 <= query.limit <= 2_147_483_647):
         raise CompilationError("INVALID_LIMIT", "$.limit", "limit must be a non-negative integer")
     if not query.metrics:
         if query.having:
             raise CompilationError("INVALID_REQUEST", "$.having", "dimension-only queries cannot have metric filters")
-        return _plan_dimension_only(model, dimensions, where_pairs, query.limit)
+        return _plan_dimension_only(model, dimensions, where, query.limit)
     metrics = tuple(_metric(model, name, f"$.metrics[{i}]") for i, name in enumerate(query.metrics))
     multistage = any(len(metric.roots) > 1 for metric in metrics)
     roots = {metric.root for metric in metrics}
@@ -98,7 +110,7 @@ def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPl
             seen_edges: set[str] = set()
             required_datasets = {
                 *(field.dataset for field in dimensions),
-                *(field.dataset for field, _ in where_pairs),
+                *(_filter_dataset(item) for item in where if _filter_dataset(item) is not None),
             }
             for dataset in sorted(required_datasets):
                 for edge in _unique_path(model, root, dataset):
@@ -114,13 +126,17 @@ def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPl
             tuple(direct_stage_keys.items()),
             dimensions,
             tuple(stages),
-            tuple(PlannedFilter(field, item.op, item.value) for field, item in where_pairs),
+            where,
             tuple(PlannedFilter(metric, item.op, item.value) for metric, item in having_pairs),
             query.limit,
         )
     root = next(iter(roots))
     assert root is not None
-    required = {root, *(field.dataset for field in dimensions), *(field.dataset for field, _ in where_pairs)}
+    required = {
+        root,
+        *(field.dataset for field in dimensions),
+        *(_filter_dataset(item) for item in where if _filter_dataset(item) is not None),
+    }
     edges: list[Relationship] = []
     seen: set[str] = set()
     for dataset in sorted(required):
@@ -129,13 +145,13 @@ def plan_query(model: BoundModel, query: Query) -> QueryPlan | MultiStageQueryPl
                 edges.append(edge)
                 seen.add(edge.name)
     return QueryPlan(SafeJoinTree(root, tuple(edges)), metrics, dimensions,
-                     tuple(PlannedFilter(field, item.op, item.value) for field, item in where_pairs),
+                     where,
                      tuple(PlannedFilter(metric, item.op, item.value) for metric, item in having_pairs), query.limit)
 
 def _plan_dimension_only(
     model: BoundModel,
     dimensions: tuple[Field, ...],
-    where_pairs: tuple[tuple[Field, FieldFilter], ...],
+    where: tuple[QueryFilter, ...],
     limit: int | None,
 ) -> QueryPlan:
     dimension_datasets = tuple(dict.fromkeys(field.dataset for field in dimensions))
@@ -176,8 +192,11 @@ def _plan_dimension_only(
     anchor, initial_edges = candidates[0]
     edges = list(initial_edges)
     seen = {edge.name for edge in edges}
-    for field, _ in where_pairs:
-        for edge in _unique_path(model, anchor, field.dataset):
+    for item in where:
+        dataset = _filter_dataset(item)
+        if dataset is None:
+            continue
+        for edge in _unique_path(model, anchor, dataset):
             if edge.name not in seen:
                 edges.append(edge)
                 seen.add(edge.name)
@@ -185,7 +204,7 @@ def _plan_dimension_only(
         SafeJoinTree(anchor, tuple(edges)),
         (),
         dimensions,
-        tuple(PlannedFilter(field, item.op, item.value) for field, item in where_pairs),
+        where,
         (),
         limit,
     )
@@ -296,6 +315,88 @@ def _direct_stage_key(metric: Metric) -> str:
         return f"measure:{metric.qualified_name}"
     return f"metric:{metric.qualified_name}"
 
+def _filter_dataset(item: QueryFilter) -> str | None:
+    if isinstance(item, PlannedFilter):
+        assert isinstance(item.expression_owner, Field)
+        return item.expression_owner.dataset
+    return item.dataset
+
+def _bind_query_filter(model: BoundModel, text: str) -> PlannedExpressionFilter:
+    if not isinstance(text, str) or not text.strip():
+        raise CompilationError("INVALID_FILTER", "$.filter", "filter must be a non-empty expression string")
+    try:
+        expression = parse(text)
+    except ExpressionError as error:
+        raise CompilationError("INVALID_FILTER", "$.filter", str(error)) from error
+    datasets: set[str] = set()
+
+    def bind(node: Expr) -> Expr:
+        if isinstance(node, Column):
+            if node.dataset is None:
+                raise CompilationError(
+                    "UNKNOWN_FIELD",
+                    "$.filter",
+                    f"filter field {node.name!r} must be dataset-qualified",
+                )
+            field = model.field_by_name.get(f"{node.dataset}.{node.name}")
+            if field is None:
+                raise CompilationError(
+                    "UNKNOWN_FIELD",
+                    "$.filter",
+                    f"unknown filter field {node.dataset}.{node.name!r}",
+                )
+            datasets.add(field.dataset)
+            return field.expression
+        if isinstance(node, Literal):
+            return node
+        if isinstance(node, Binary):
+            return Binary(node.op, bind(node.left), bind(node.right))
+        if isinstance(node, Unary):
+            return Unary(node.op, bind(node.operand))
+        if isinstance(node, IsNull):
+            return IsNull(bind(node.operand), node.negated)
+        if isinstance(node, Case):
+            return Case(
+                tuple((bind(condition), bind(value)) for condition, value in node.branches),
+                bind(node.otherwise) if node.otherwise is not None else None,
+            )
+        if isinstance(node, Between):
+            return Between(bind(node.operand), bind(node.lower), bind(node.upper), node.negated)
+        if isinstance(node, InList):
+            return InList(bind(node.operand), tuple(bind(value) for value in node.values), node.negated)
+        if isinstance(node, Like):
+            return Like(bind(node.operand), bind(node.pattern), node.negated)
+        if isinstance(node, Call):
+            if node.name in SUPPORTED_AGGREGATES or node.name not in SUPPORTED_SCALAR_FUNCTIONS:
+                raise CompilationError(
+                    "INVALID_FILTER",
+                    "$.filter",
+                    f"unsupported filter function {node.name}",
+                )
+            if node.distinct:
+                raise CompilationError("INVALID_FILTER", "$.filter", "DISTINCT is not valid in a scalar filter function")
+            accepted = SUPPORTED_SCALAR_FUNCTIONS[node.name]
+            if len(node.args) not in accepted:
+                raise CompilationError(
+                    "INVALID_FILTER",
+                    "$.filter",
+                    f"{node.name} has an invalid argument count",
+                )
+            return Call(node.name, tuple(bind(argument) for argument in node.args), node.distinct)
+        if isinstance(node, (FilteredAggregate, MeasureRef, Star)):
+            raise CompilationError("INVALID_FILTER", "$.filter", "filter cannot contain aggregates or *")
+        raise AssertionError(node)
+
+    bound = bind(expression)
+    if len(datasets) > 1:
+        raise CompilationError(
+            "CROSS_DATASET_FILTER",
+            "$.filter",
+            "filter expression may reference fields from only one dataset",
+            tuple(sorted(datasets)),
+        )
+    return PlannedExpressionFilter(bound, next(iter(datasets)) if datasets else None)
+
 def _field(model: BoundModel, name: str, location: str) -> Field:
     field = model.field_by_name.get(name)
     if field is None:
@@ -348,6 +449,8 @@ def _undirected_connected(model: BoundModel, root: str, target: str) -> bool:
     return False
 
 def _validate_filters(query: Query) -> None:
+    if query.filter is not None and query.where:
+        raise CompilationError("INVALID_FILTER", "$", "use either filter or where, not both")
     allowed = {"eq", "ne", "lt", "le", "gt", "ge", "is_null", "is_not_null"}
     for collection, filters in (("where", query.where), ("having", query.having)):
         for i, item in enumerate(filters):

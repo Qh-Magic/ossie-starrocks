@@ -8,7 +8,7 @@ from ._expressions import Between, Binary, Call, Case, Column, Expr, FilteredAgg
 from ._model import BoundModel, Metric
 from ._profile import SUPPORTED_AGGREGATES, SUPPORTED_SCALAR_FUNCTIONS
 from .api import CompilationError, CompiledQuery, OutputColumn
-from .planning import ComponentRef, MultiStageQueryPlan, MultiStageStage, PlannedFilter, QueryPlan
+from .planning import ComponentRef, MultiStageQueryPlan, MultiStageStage, PlannedExpressionFilter, PlannedFilter, QueryFilter, QueryPlan
 
 def render_query(model: BoundModel, plan: QueryPlan | MultiStageQueryPlan) -> CompiledQuery:
     if isinstance(plan, MultiStageQueryPlan):
@@ -299,7 +299,9 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
         return _render_expr(expression.expression, aliases)
     raise AssertionError(expression)
 
-def _render_filter(item: PlannedFilter, aliases: dict[str, str]) -> str:
+def _render_filter(item: QueryFilter, aliases: dict[str, str]) -> str:
+    if isinstance(item, PlannedExpressionFilter):
+        return _render_expr(item.expression, aliases)
     left = _render_expr(item.expression_owner.expression, aliases)
     if item.op == "is_null":
         return f"{left} IS NULL"

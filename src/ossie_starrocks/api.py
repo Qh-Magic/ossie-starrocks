@@ -32,6 +32,7 @@ class Query:
     where: tuple[FieldFilter, ...] = ()
     having: tuple[MetricFilter, ...] = ()
     limit: int | None = None
+    filter: str | None = None
 
 @dataclass(frozen=True)
 class OutputColumn:

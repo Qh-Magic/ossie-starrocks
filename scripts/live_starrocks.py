@@ -269,6 +269,44 @@ assert_same(
     """,
 )
 
+expression_filtered_metric = compiler.compile(
+    Query(
+        metrics=("safe_revenue_per_customer",),
+        dimensions=("customers.country",),
+        filter="customers.country IN ('TW') OR customers.country LIKE 'J%'",
+    )
+)
+assert_same(
+    "bound Layer 3 filter expression in every branch",
+    expression_filtered_metric.sql + " ORDER BY d0",
+    """
+    WITH order_stage AS (
+        SELECT c.country, SUM(o.amount) AS value, 1 AS present
+        FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
+        WHERE c.country IN ('TW') OR c.country LIKE 'J%'
+        GROUP BY c.country
+    ), customer_stage AS (
+        SELECT country, COUNT(customer_id) AS value, 1 AS present
+        FROM customers
+        WHERE country IN ('TW') OR country LIKE 'J%'
+        GROUP BY country
+    )
+    SELECT COALESCE(order_stage.country, customer_stage.country),
+           COALESCE(
+             CASE WHEN order_stage.present IS NULL THEN NULL ELSE order_stage.value END,
+             0
+           ) / NULLIF(
+             CASE WHEN customer_stage.present IS NULL THEN 0 ELSE customer_stage.value END,
+             0
+           )
+    FROM order_stage
+    FULL OUTER JOIN customer_stage
+      ON order_stage.country = customer_stage.country
+         OR (order_stage.country IS NULL AND customer_stage.country IS NULL)
+    ORDER BY COALESCE(order_stage.country, customer_stage.country)
+    """,
+)
+
 cross_grain = compiler.compile(Query(metrics=("orders_per_customer",)))
 assert_same(
     "global cross-grain multi-stage aggregate",

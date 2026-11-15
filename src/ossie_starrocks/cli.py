@@ -26,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
         query = Query(
             metrics=_strings(request.get("metrics", []), "$.metrics"),
             dimensions=_strings(request.get("dimensions", []), "$.dimensions"),
+            filter=request.get("filter"),
             where=tuple(_field_filter(item, index) for index, item in enumerate(_objects(request.get("where", []), "$.where"))),
             having=tuple(_metric_filter(item, index) for index, item in enumerate(_objects(request.get("having", []), "$.having"))),
             limit=request.get("limit"),

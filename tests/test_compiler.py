@@ -54,6 +54,50 @@ class CompilerTests(unittest.TestCase):
         self.assertIn("HAVING SUM(t0.`amount`) > 100", result.sql)
         self.assertTrue(result.sql.endswith("LIMIT 10"))
 
+    def test_compiles_bound_layer3_filter_expression(self):
+        result = self.compile(
+            sales_model(),
+            Query(
+                metrics=("revenue",),
+                filter="orders.status IN ('complete', 'pending') OR orders.status LIKE 'vip%'",
+            ),
+        )
+
+        self.assertIn(
+            "WHERE ((t0.`status` IN ('complete', 'pending')) OR (t0.`status` LIKE 'vip%'))",
+            result.sql,
+        )
+
+    def test_rejects_cross_dataset_layer3_filter(self):
+        self.assert_error(
+            "CROSS_DATASET_FILTER",
+            sales_model(),
+            Query(
+                metrics=("revenue",),
+                filter="orders.status = 'complete' AND customers.country = 'TW'",
+            ),
+        )
+
+    def test_rejects_filter_and_legacy_where_together(self):
+        self.assert_error(
+            "INVALID_FILTER",
+            sales_model(),
+            Query(
+                metrics=("revenue",),
+                filter="orders.status = 'complete'",
+                where=(FieldFilter("orders.status", "eq", "complete"),),
+            ),
+        )
+
+    def test_constant_layer3_filter_needs_no_join(self):
+        result = self.compile(
+            sales_model(),
+            Query(metrics=("revenue",), filter="FALSE"),
+        )
+
+        self.assertIn("WHERE FALSE", result.sql)
+        self.assertNotIn("JOIN", result.sql)
+
     def test_compiles_dimension_only_query_from_its_dataset(self):
         result = self.compile(
             sales_model(),

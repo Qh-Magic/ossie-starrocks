@@ -29,7 +29,7 @@ compiler = Compiler.from_file("sales.json")
 result = compiler.compile(Query(
     metrics=("revenue",),
     dimensions=("customers.country",),
-    where=(FieldFilter("orders.status", "eq", "paid"),),
+    filter="orders.status = 'paid' OR orders.status = 'settled'",
 ))
 
 print(result.sql)
@@ -49,15 +49,15 @@ The request file uses this shape.
 {
   "metrics": ["revenue"],
   "dimensions": ["customers.country"],
-  "where": [
-    {"field": "orders.status", "op": "eq", "value": "paid"}
-  ],
+  "filter": "orders.status = 'paid' OR orders.status = 'settled'",
   "having": [
     {"metric": "revenue", "op": "gt", "value": 100}
   ],
   "limit": 100
 }
 ```
+
+`filter` is the Ossie Layer 3 expression form. It is parsed into a controlled AST, bound to declared semantic fields, and may reference fields from one dataset. The legacy structured `where` array remains available for API compatibility, but a request cannot use both forms.
 
 The command writes SQL to stdout. It writes a JSON diagnostic to stderr and exits with code 2 when compilation fails.
 
