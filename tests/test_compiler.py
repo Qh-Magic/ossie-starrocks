@@ -33,7 +33,7 @@ class CompilerTests(unittest.TestCase):
         self.assertEqual(
             "SELECT t1.`country` AS `d0`, SUM(t0.`amount`) AS `m0`\n"
             "FROM `default_catalog`.`sales`.`orders` AS t0\n"
-            "INNER JOIN `default_catalog`.`sales`.`customers` AS t1 "
+            "LEFT JOIN `default_catalog`.`sales`.`customers` AS t1 "
             "ON t0.`customer_id` = t1.`customer_id`\n"
             "GROUP BY t1.`country`",
             result.sql,
@@ -565,7 +565,7 @@ class CompilerTests(unittest.TestCase):
         result = self.compile(model, Query(metrics=("ratio",), dimensions=("customers.country",)))
 
         self.assertIn("t1.`country` AS `k0`, COUNT(t0.`customer_id`) AS `value`", result.sql)
-        self.assertIn("INNER JOIN `default_catalog`.`sales`.`customers` AS t1", result.sql)
+        self.assertIn("LEFT JOIN `default_catalog`.`sales`.`customers` AS t1", result.sql)
         self.assertIn("t0.`country` AS `k0`, COUNT(t0.`customer_id`) AS `value`", result.sql)
         self.assertIn("FULL OUTER JOIN s1 ON", result.sql)
         self.assertIn("COALESCE(s0.`k0`, s1.`k0`) AS `d0`", result.sql)

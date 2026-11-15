@@ -73,7 +73,8 @@ sql(
         (10, 1, 100.00, 'complete', '2026-01-02 10:00:00'),
         (11, 1, 25.00, 'cancelled', '2026-01-15 12:00:00'),
         (12, 2, 80.00, 'complete', '2026-02-01 09:00:00'),
-        (13, 3, NULL, 'complete', '2026-02-03 08:00:00');
+        (13, 3, NULL, 'complete', '2026-02-03 08:00:00'),
+        (14, 99, 50.00, 'complete', '2026-02-04 08:00:00');
     """
 )
 
@@ -142,7 +143,7 @@ assert_same(
     grouped.sql + " ORDER BY d0",
     """
     SELECT c.country, SUM(o.amount)
-    FROM orders o JOIN customers c ON o.customer_id = c.customer_id
+    FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
     GROUP BY c.country ORDER BY c.country
     """,
 )
@@ -169,7 +170,7 @@ assert_same(
            order_stage.value / customer_stage.value
     FROM (
         SELECT c.country, COUNT(o.customer_id) AS value
-        FROM orders o JOIN customers c ON o.customer_id = c.customer_id
+        FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
         GROUP BY c.country
     ) order_stage
     FULL OUTER JOIN (
@@ -198,7 +199,7 @@ assert_same(
            order_stage.value / customer_stage.value
     FROM (
         SELECT c.country, COUNT(o.customer_id) AS value
-        FROM orders o JOIN customers c ON o.customer_id = c.customer_id
+        FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
         WHERE c.country = 'TW'
         GROUP BY c.country
     ) order_stage
@@ -228,7 +229,7 @@ assert_same(
            order_stage.value / customer_stage.value
     FROM (
         SELECT c.country, COUNT(o.customer_id) AS value
-        FROM orders o JOIN customers c ON o.customer_id = c.customer_id
+        FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
         GROUP BY c.country
     ) order_stage
     FULL OUTER JOIN (

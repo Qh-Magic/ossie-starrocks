@@ -84,7 +84,7 @@ The current release accepts the following model and query features.
 - Queries with one metric grain, dimensions, field filters, metric filters, and a limit.
 - `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `is_null`, and `is_not_null` filters.
 
-The compiler emits deterministic StarRocks SQL with backtick-quoted identifiers and typed literals. It uses `INNER JOIN` for relationships. Rows with a missing target dimension row do not contribute to the result.
+The compiler emits deterministic StarRocks SQL with backtick-quoted identifiers and typed literals. It follows safe many-to-one paths with `LEFT JOIN`, as required by the Ossie Layer 3 lowering, so an unmatched home row contributes to the `NULL` dimension group instead of being discarded.
 
 ## Refused constructs
 
@@ -117,6 +117,8 @@ Research on using the same semantic model through Trino is available in [`docs/r
 The compiler normalizes an Ossie document into immutable datasets, fields, metrics, and a directed many-to-one relationship graph. The planner proves one metric grain and one safe path to every required dataset. The renderer accepts only owned expression nodes and emits one StarRocks `SELECT`.
 
 The 0.3 loader validates against the Apache Ossie draft core schema bundled from [`core-spec/ossie-schema.json`](https://github.com/apache/ossie/blob/main/core-spec/ossie-schema.json), then applies semantic-reference and StarRocks capability checks. The expression language is still a documented subset; unsupported constructs fail closed.
+
+The automatic join and branch strategy follows the shared-dimension scope of the draft [`Wide Table Query Interface`](https://github.com/apache/ossie/blob/main/core-spec/wide_table_semantics.md): many-to-one paths use left joins, while independently aggregated metric stages are combined with null-safe full outer joins.
 
 ## License
 

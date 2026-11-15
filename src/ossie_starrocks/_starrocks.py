@@ -29,7 +29,7 @@ def render_query(model: BoundModel, plan: QueryPlan | MultiStageQueryPlan) -> Co
     lines = ["SELECT " + ", ".join(projections), f"FROM {_render_table(model, root)} AS {aliases[root]}"]
     for edge in plan.joins.edges:
         conditions = " AND ".join(f"{aliases[edge.many]}.`{left}` = {aliases[edge.one]}.`{right}`" for left, right in edge.keys)
-        lines.append(f"INNER JOIN {_render_table(model, edge.one)} AS {aliases[edge.one]} ON {conditions}")
+        lines.append(f"LEFT JOIN {_render_table(model, edge.one)} AS {aliases[edge.one]} ON {conditions}")
     if plan.where:
         lines.append("WHERE " + " AND ".join(_render_filter(item, aliases) for item in plan.where))
     if plan.dimensions:
@@ -69,7 +69,7 @@ def _render_multistage_query(model: BoundModel, plan: MultiStageQueryPlan) -> Co
                 f"{aliases[edge.many]}.`{left}` = {aliases[edge.one]}.`{right}`"
                 for left, right in edge.keys
             )
-            lines.append(f"INNER JOIN {_render_table(model, edge.one)} AS {aliases[edge.one]} ON {conditions}")
+            lines.append(f"LEFT JOIN {_render_table(model, edge.one)} AS {aliases[edge.one]} ON {conditions}")
         if plan.where:
             lines.append("WHERE " + " AND ".join(_render_filter(item, aliases) for item in plan.where))
         if plan.dimensions:

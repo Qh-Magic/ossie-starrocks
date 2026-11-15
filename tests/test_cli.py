@@ -41,7 +41,7 @@ class CliTests(unittest.TestCase):
                 env=environment,
             )
         self.assertEqual(0, completed.returncode, completed.stderr)
-        self.assertIn("INNER JOIN `default_catalog`.`sales`.`customers`", completed.stdout)
+        self.assertIn("LEFT JOIN `default_catalog`.`sales`.`customers`", completed.stdout)
         self.assertEqual("", completed.stderr)
 
     def test_cli_returns_diagnostic_for_invalid_operator_type(self):
