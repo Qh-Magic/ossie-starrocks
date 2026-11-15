@@ -417,6 +417,49 @@ class CompilerTests(unittest.TestCase):
         self.assertIn("DATE_TRUNC('month', t0.`ordered_at`)", result.sql)
         self.assertIn("SUM(ABS(t0.`amount`))", result.sql)
 
+    def test_ossie_03_compiles_required_string_and_math_functions(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].append(
+            {
+                "name": "status_label",
+                "expression": {
+                    "sql": "CONCAT(UPPER(status), '-', SPLIT_PART('a-b', '-', 2))"
+                },
+            }
+        )
+        model["metrics"] = [
+            {
+                "name": "math_profile",
+                "expression": {
+                    "sql": (
+                        "GREATEST(MOD(COUNT(orders.customer_id), 5), "
+                        "LEAST(POWER(2, 3), 10)) + SIGN(SUM(orders.amount)) + "
+                        "EXP(0) + LN(1) + LOG(10, 100) + LOG10(100)"
+                    )
+                },
+            }
+        ]
+
+        starrocks = self.compiler(model).compile(
+            Query(metrics=("math_profile",), dimensions=("orders.status_label",))
+        )
+        trino = self.compiler(model).compile(
+            Query(metrics=("math_profile",), dimensions=("orders.status_label",)),
+            target="trino",
+        )
+
+        for sql in (starrocks.sql, trino.sql):
+            self.assertIn("CONCAT(UPPER(", sql)
+            self.assertIn("SPLIT_PART('a-b', '-', 2)", sql)
+            self.assertIn("GREATEST(MOD(COUNT(", sql)
+            self.assertIn("LEAST(POWER(2, 3), 10)", sql)
+            self.assertIn("SIGN(SUM(", sql)
+            self.assertIn("EXP(0)", sql)
+            self.assertIn("LN(1)", sql)
+            self.assertIn("LOG(10, 100)", sql)
+            self.assertIn("LOG10(100)", sql)
+
     def test_ossie_03_compiles_required_conditional_functions(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"

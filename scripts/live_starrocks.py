@@ -89,6 +89,12 @@ model = {
                 {"name": "customer_id", "expression": {"sql": "customer_id"}},
                 {"name": "amount", "expression": {"sql": "amount"}},
                 {"name": "status", "expression": {"sql": "status"}},
+                {
+                    "name": "status_label",
+                    "expression": {
+                        "sql": "CONCAT(UPPER(status), '-', SPLIT_PART('a-b', '-', 2))"
+                    },
+                },
                 {"name": "ordered_at", "expression": {"sql": "ordered_at"}},
                 {"name": "order_month", "expression": {"sql": "DATE_TRUNC('month', ordered_at)"}},
             ],
@@ -120,6 +126,16 @@ model = {
     ],
     "metrics": [
         {"name": "revenue", "expression": {"sql": "SUM(orders.amount)"}},
+        {
+            "name": "math_profile",
+            "expression": {
+                "sql": (
+                    "GREATEST(MOD(COUNT(orders.customer_id), 5), "
+                    "LEAST(POWER(2, 3), 10)) + SIGN(SUM(orders.amount)) + "
+                    "EXP(0) + LN(1) + LOG(10, 100) + LOG10(100)"
+                )
+            },
+        },
         {
             "name": "active_customers",
             "expression": {
@@ -182,6 +198,22 @@ assert_same(
     SELECT c.country, SUM(o.amount)
     FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
     GROUP BY c.country ORDER BY c.country
+    """,
+)
+
+portable_functions = compiler.compile(
+    Query(metrics=("math_profile",), dimensions=("orders.status_label",))
+)
+assert_same(
+    "required string and math functions",
+    portable_functions.sql + " ORDER BY d0",
+    """
+    SELECT CONCAT(UPPER(status), '-', SPLIT_PART('a-b', '-', 2)),
+           GREATEST(MOD(COUNT(customer_id), 5), LEAST(POWER(2, 3), 10))
+             + SIGN(SUM(amount)) + EXP(0) + LN(1) + LOG(10, 100) + LOG10(100)
+    FROM orders
+    GROUP BY CONCAT(UPPER(status), '-', SPLIT_PART('a-b', '-', 2))
+    ORDER BY 1
     """,
 )
 

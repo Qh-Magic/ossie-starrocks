@@ -51,6 +51,12 @@ model = {
                 {"name": "orderstatus", "expression": {"sql": "orderstatus"}},
                 {"name": "status_left", "expression": {"sql": "LEFT(orderstatus, 1)"}},
                 {"name": "status_right", "expression": {"sql": "RIGHT(orderstatus, 1)"}},
+                {
+                    "name": "status_label",
+                    "expression": {
+                        "sql": "CONCAT(UPPER(orderstatus), '-', SPLIT_PART('a-b', '-', 2))"
+                    },
+                },
                 {"name": "totalprice", "expression": {"sql": "totalprice"}},
             ],
         },
@@ -75,6 +81,16 @@ model = {
     ],
     "metrics": [
         {"name": "revenue", "expression": {"sql": "ROUND(SUM(orders.totalprice), 2)"}},
+        {
+            "name": "math_profile",
+            "expression": {
+                "sql": (
+                    "GREATEST(MOD(COUNT(orders.custkey), 5), "
+                    "LEAST(POWER(2, 3), 10)) + SIGN(SUM(orders.totalprice)) + "
+                    "EXP(0) + LN(1) + LOG(10, 100) + LOG10(100)"
+                )
+            },
+        },
         {
             "name": "revenue_per_customer",
             "expression": {
@@ -102,6 +118,23 @@ assert_same(
     LEFT JOIN tpch.tiny.customer c ON o.custkey = c.custkey
     GROUP BY c.mktsegment
     ORDER BY c.mktsegment
+    """,
+)
+
+portable_functions = compiler.compile(
+    Query(metrics=("math_profile",), dimensions=("orders.status_label",)),
+    target="trino",
+)
+assert_same(
+    "required string and math functions",
+    portable_functions.sql + " ORDER BY d0",
+    """
+    SELECT CONCAT(UPPER(orderstatus), '-', SPLIT_PART('a-b', '-', 2)),
+           GREATEST(MOD(COUNT(custkey), 5), LEAST(POWER(2, 3), 10))
+             + SIGN(SUM(totalprice)) + EXP(0) + LN(1) + LOG(10, 100) + LOG10(100)
+    FROM tpch.tiny.orders
+    GROUP BY CONCAT(UPPER(orderstatus), '-', SPLIT_PART('a-b', '-', 2))
+    ORDER BY 1
     """,
 )
 
