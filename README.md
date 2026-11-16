@@ -79,10 +79,6 @@ python3 scripts/verify_wheel.py
 
 The `test` workflow runs the suite on Python 3.11, 3.12, and 3.13. The manually triggered `live-starrocks` workflow starts the official StarRocks 3.5 container and compares generated queries with hand-written baseline SQL.
 
-## Related project
-
-The Trino compiler, protocol client, semantic gateway, TPCH example, and live Trino verification live in the independent [`Qh-Magic/ossie-trino`](https://github.com/Qh-Magic/ossie-trino) repository.
-
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
