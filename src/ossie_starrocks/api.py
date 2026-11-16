@@ -44,3 +44,9 @@ class CompiledQuery:
     sql: str
     columns: tuple[OutputColumn, ...]
     dependencies: tuple[str, ...]
+
+@dataclass(frozen=True)
+class ModelIdentity:
+    name: str
+    version: str
+    sha256: str

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -33,7 +34,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         query = _read_query(arguments.request)
         target = arguments.target if arguments.command == "compile" else "trino"
-        result = Compiler.from_file(arguments.model).compile(query, target=target)
+        compiler = Compiler.from_file(arguments.model)
+        result = compiler.compile(query, target=target)
         if arguments.command == "query":
             executed = TrinoClient(
                 arguments.trino_url,
@@ -61,12 +63,24 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.command == "compile":
         print(result.sql)
     else:
+        identity = compiler.model_identity
         print(json.dumps({
             "queryId": executed.query_id,
             "columns": [{"name": column.name, "type": column.type} for column in executed.columns],
             "rows": executed.rows,
             "sql": result.sql,
             "dependencies": result.dependencies,
+            "audit": {
+                "modelName": identity.name,
+                "modelVersion": identity.version,
+                "modelSha256": identity.sha256,
+                "requestSha256": _file_sha256(arguments.request),
+                "target": "trino",
+                "trinoUser": arguments.user,
+                "queryId": executed.query_id,
+                "dependencies": result.dependencies,
+                "sql": result.sql,
+            },
         }))
     return 0
 
@@ -74,6 +88,10 @@ def main(argv: list[str] | None = None) -> int:
 def _add_semantic_inputs(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", required=True)
     parser.add_argument("--request", required=True)
+
+
+def _file_sha256(path: str) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def _read_query(path: str) -> Query:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -24,6 +25,8 @@ class CliTests(unittest.TestCase):
             request_path = root / "request.json"
             model_path.write_text(json.dumps(sales_model()), encoding="utf-8")
             request_path.write_text(json.dumps({"metrics": ["revenue"]}), encoding="utf-8")
+            expected_model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
+            expected_request_sha256 = hashlib.sha256(request_path.read_bytes()).hexdigest()
             client = Mock()
             client.execute.return_value = TrinoResult(
                 query_id="query-7",
@@ -46,6 +49,17 @@ class CliTests(unittest.TestCase):
         self.assertEqual([["255.00"]], payload["rows"])
         self.assertEqual(["orders"], payload["dependencies"])
         self.assertIn('SUM(t0."amount")', payload["sql"])
+        self.assertEqual("sales", payload["audit"]["modelName"])
+        self.assertEqual("0.2.0.dev0", payload["audit"]["modelVersion"])
+        self.assertEqual("analyst", payload["audit"]["trinoUser"])
+        self.assertEqual(
+            expected_model_sha256,
+            payload["audit"]["modelSha256"],
+        )
+        self.assertEqual(
+            expected_request_sha256,
+            payload["audit"]["requestSha256"],
+        )
         client.execute.assert_called_once()
 
     def test_cli_matches_library_surface(self):

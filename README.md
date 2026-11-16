@@ -40,7 +40,7 @@ ossie-starrocks query \
   --user analyst
 ```
 
-The result contains five market-segment rows, the generated Trino SQL, and the Trino query ID. Stop the demo with `docker compose -f examples/trino-tpch/compose.yaml down`.
+The result contains five market-segment rows, the generated Trino SQL, and the Trino query ID. Its `audit` object records the model name, Ossie version, SHA-256 fingerprints for the exact model and request files, Trino user, dependencies, SQL, and query ID. Stop the demo with `docker compose -f examples/trino-tpch/compose.yaml down`.
 
 ## Compile a request
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -232,6 +234,18 @@ if quickstart.returncode != 0:
 quickstart_result = json.loads(quickstart.stdout)
 if not quickstart_result.get("queryId") or len(quickstart_result.get("rows", [])) != 5:
     raise AssertionError(f"quickstart returned an unexpected result: {quickstart_result!r}")
+quickstart_audit = quickstart_result.get("audit", {})
+expected_model_hash = hashlib.sha256(Path("examples/trino-tpch/model.json").read_bytes()).hexdigest()
+expected_request_hash = hashlib.sha256(Path("examples/trino-tpch/request.json").read_bytes()).hexdigest()
+if (
+    quickstart_audit.get("queryId") != quickstart_result["queryId"]
+    or quickstart_audit.get("modelName") != "trino_tpch_quickstart"
+    or quickstart_audit.get("modelVersion") != "0.3.0.dev0"
+    or quickstart_audit.get("modelSha256") != expected_model_hash
+    or quickstart_audit.get("requestSha256") != expected_request_hash
+    or quickstart_audit.get("trinoUser") != "ossie-live"
+):
+    raise AssertionError(f"quickstart returned invalid audit metadata: {quickstart_audit!r}")
 print(
     f"PASS published Trino quickstart with query id {quickstart_result['queryId']}: "
     f"{len(quickstart_result['rows'])} rows"

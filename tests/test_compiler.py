@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from pathlib import Path
+import tempfile
 import unittest
 from datetime import datetime
 
@@ -16,6 +19,26 @@ from tests.fixtures import clone, field, metric, sales_model
 
 
 class CompilerTests(unittest.TestCase):
+    def test_exposes_source_model_identity_for_audit(self):
+        document = json.dumps(sales_model())
+        compiler = Compiler.from_text(document, format="json")
+
+        self.assertEqual("sales", compiler.model_identity.name)
+        self.assertEqual("0.2.0.dev0", compiler.model_identity.version)
+        self.assertEqual(
+            hashlib.sha256(document.encode("utf-8")).hexdigest(),
+            compiler.model_identity.sha256,
+        )
+
+    def test_file_identity_hashes_exact_source_bytes(self):
+        content = json.dumps(sales_model(), indent=2).replace("\n", "\r\n").encode("utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.json"
+            path.write_bytes(content)
+            compiler = Compiler.from_file(path)
+
+        self.assertEqual(hashlib.sha256(content).hexdigest(), compiler.model_identity.sha256)
+
     def compiler(self, model: dict) -> Compiler:
         return Compiler.from_text(json.dumps(model), format="json")
 

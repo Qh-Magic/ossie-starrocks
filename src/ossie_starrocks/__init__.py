@@ -4,6 +4,7 @@ from .compiler import (
     Compiler,
     FieldFilter,
     MetricFilter,
+    ModelIdentity,
     OutputColumn,
     Query,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "Compiler",
     "FieldFilter",
     "MetricFilter",
+    "ModelIdentity",
     "OutputColumn",
     "Query",
     "TrinoClient",
