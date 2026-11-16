@@ -248,6 +248,17 @@ except TrinoError as error:
 else:
     raise AssertionError("Trino result limit did not reject a high-cardinality result")
 
+try:
+    TrinoClient("http://127.0.0.1:8080", "ossie-live", query_timeout=0.001).execute(
+        "SELECT count(*) FROM tpch.sf100.lineitem"
+    )
+except TrinoError as error:
+    if error.code != "EXCEEDED_TIME_LIMIT" or not error.query_id:
+        raise
+    print(f"PASS Trino server-side timeout stopped query {error.query_id}")
+else:
+    raise AssertionError("Trino query unexpectedly completed within the 1ms limit")
+
 staged_true_division = compiler.compile(
     Query(
         metrics=("orders_per_customer_count",),

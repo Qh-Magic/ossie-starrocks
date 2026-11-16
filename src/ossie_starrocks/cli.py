@@ -22,6 +22,7 @@ def _parser() -> argparse.ArgumentParser:
     query_parser.add_argument("--catalog")
     query_parser.add_argument("--schema")
     query_parser.add_argument("--timeout", type=float, default=30.0)
+    query_parser.add_argument("--query-timeout-seconds", type=float, default=300.0)
     query_parser.add_argument("--retries", type=int, default=3)
     query_parser.add_argument("--max-rows", type=int, default=10_000)
     return parser
@@ -40,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
                 catalog=arguments.catalog,
                 schema=arguments.schema,
                 timeout=arguments.timeout,
+                query_timeout=arguments.query_timeout_seconds,
                 max_retries=arguments.retries,
                 max_rows=arguments.max_rows,
             ).execute(result.sql)

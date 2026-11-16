@@ -57,6 +57,7 @@ class TrinoClientTests(unittest.TestCase):
         self.assertEqual("POST", first[0].method)
         self.assertEqual(b'SELECT "country" FROM "customers"', first[0].data)
         self.assertEqual("analyst", first[0].get_header("X-trino-user"))
+        self.assertEqual("300s", first[0].get_header("X-trino-session").split("=")[1])
         self.assertEqual("GET", second[0].method)
         self.assertEqual(7, second[1])
 
@@ -111,6 +112,8 @@ class TrinoClientTests(unittest.TestCase):
             TrinoClient("http://trino.test", "analyst\nX-Trino-Role: admin")
         with self.assertRaisesRegex(ValueError, "positive finite"):
             TrinoClient("http://trino.test", "analyst", timeout=0)
+        with self.assertRaisesRegex(ValueError, "query_timeout"):
+            TrinoClient("http://trino.test", "analyst", query_timeout=float("inf"))
         with self.assertRaisesRegex(ValueError, "positive integer"):
             TrinoClient("http://trino.test", "analyst", max_rows=0)
 
@@ -178,6 +181,22 @@ class TrinoClientTests(unittest.TestCase):
         self.assertEqual("TRINO_RESULT_LIMIT", raised.exception.code)
         self.assertEqual("query-6", raised.exception.query_id)
         self.assertEqual("DELETE", open_request.requests[1][0].method)
+
+    def test_formats_subsecond_query_timeout_for_trino(self):
+        open_request = _Open({"id": "query-7", "data": [[1]]})
+        client = TrinoClient(
+            "http://trino.test",
+            "analyst",
+            query_timeout=0.0011,
+            _open=open_request,
+        )
+
+        client.execute("SELECT 1")
+
+        self.assertEqual(
+            "query_max_run_time=2ms",
+            open_request.requests[0][0].get_header("X-trino-session"),
+        )
 
 
 if __name__ == "__main__":

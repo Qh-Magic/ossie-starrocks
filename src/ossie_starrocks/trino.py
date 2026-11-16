@@ -41,6 +41,7 @@ class TrinoClient:
         catalog: str | None = None,
         schema: str | None = None,
         timeout: float = 30.0,
+        query_timeout: float = 300.0,
         max_retries: int = 3,
         max_rows: int = 10_000,
         _open: Callable[..., object] = urlopen,
@@ -51,6 +52,8 @@ class TrinoClient:
             raise ValueError("Trino URL must be an absolute http or https URL")
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be a positive finite number")
+        if not math.isfinite(query_timeout) or query_timeout <= 0:
+            raise ValueError("query_timeout must be a positive finite number")
         if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be a non-negative integer")
         if not isinstance(max_rows, int) or isinstance(max_rows, bool) or max_rows <= 0:
@@ -61,6 +64,7 @@ class TrinoClient:
             "Content-Type": "text/plain; charset=utf-8",
             "X-Trino-User": self._header("user", user),
             "X-Trino-Source": self._header("source", source),
+            "X-Trino-Session": f"query_max_run_time={self._duration(query_timeout)}",
         }
         if catalog is not None:
             self._headers["X-Trino-Catalog"] = self._header("catalog", catalog)
@@ -198,3 +202,10 @@ class TrinoClient:
         if not value or any(character in value for character in "\r\n"):
             raise ValueError(f"Trino {name} must be a non-empty single-line value")
         return value
+
+    @staticmethod
+    def _duration(seconds: float) -> str:
+        milliseconds = max(1, math.ceil(seconds * 1000))
+        if milliseconds % 1000 == 0:
+            return f"{milliseconds // 1000}s"
+        return f"{milliseconds}ms"
