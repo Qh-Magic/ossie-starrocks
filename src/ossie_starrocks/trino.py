@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import math
+import time
 from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
@@ -40,13 +41,17 @@ class TrinoClient:
         catalog: str | None = None,
         schema: str | None = None,
         timeout: float = 30.0,
+        max_retries: int = 3,
         _open: Callable[..., object] = urlopen,
+        _sleep: Callable[[float], None] = time.sleep,
     ):
         parts = urlsplit(url)
         if parts.scheme not in {"http", "https"} or not parts.netloc:
             raise ValueError("Trino URL must be an absolute http or https URL")
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be a positive finite number")
+        if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
+            raise ValueError("max_retries must be a non-negative integer")
         self._origin = (parts.scheme.lower(), parts.netloc.lower())
         self._statement_url = urljoin(url.rstrip("/") + "/", "v1/statement")
         self._headers = {
@@ -59,7 +64,9 @@ class TrinoClient:
         if schema is not None:
             self._headers["X-Trino-Schema"] = self._header("schema", schema)
         self._timeout = timeout
+        self._max_retries = max_retries
         self._open = _open
+        self._sleep = _sleep
 
     def execute(self, sql: str) -> TrinoResult:
         statement = sql.lstrip()
@@ -96,18 +103,33 @@ class TrinoClient:
 
     def _request(self, url: str, body: bytes | None = None) -> dict:
         request = Request(url, data=body, headers=self._headers, method="POST" if body is not None else "GET")
-        try:
-            with self._open(request, timeout=self._timeout) as response:
-                payload = json.load(response)
-        except HTTPError as error:
-            raise TrinoError("TRINO_HTTP_ERROR", f"Trino returned HTTP {error.code}") from error
-        except (URLError, OSError) as error:
-            raise TrinoError("TRINO_CONNECTION_ERROR", str(error)) from error
-        except (json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise TrinoError("TRINO_PROTOCOL_ERROR", "Trino returned invalid JSON") from error
+        for attempt in range(self._max_retries + 1):
+            try:
+                with self._open(request, timeout=self._timeout) as response:
+                    payload = json.load(response)
+                break
+            except HTTPError as error:
+                if error.code not in {429, 502, 503, 504} or attempt == self._max_retries:
+                    raise TrinoError("TRINO_HTTP_ERROR", f"Trino returned HTTP {error.code}") from error
+                self._sleep(self._retry_delay(error))
+            except (URLError, OSError) as error:
+                raise TrinoError("TRINO_CONNECTION_ERROR", str(error)) from error
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                raise TrinoError("TRINO_PROTOCOL_ERROR", "Trino returned invalid JSON") from error
         if not isinstance(payload, dict):
             raise TrinoError("TRINO_PROTOCOL_ERROR", "Trino response must be a JSON object")
         return payload
+
+    @staticmethod
+    def _retry_delay(error: HTTPError) -> float:
+        if error.code == 429:
+            try:
+                requested = float(error.headers.get("Retry-After", "0.1"))
+            except (TypeError, ValueError):
+                requested = 0.1
+            if math.isfinite(requested):
+                return min(max(requested, 0.05), 5.0)
+        return 0.075
 
     @staticmethod
     def _query_id(page: dict) -> str:

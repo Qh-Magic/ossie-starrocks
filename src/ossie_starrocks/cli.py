@@ -22,6 +22,7 @@ def _parser() -> argparse.ArgumentParser:
     query_parser.add_argument("--catalog")
     query_parser.add_argument("--schema")
     query_parser.add_argument("--timeout", type=float, default=30.0)
+    query_parser.add_argument("--retries", type=int, default=3)
     return parser
 
 
@@ -38,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
                 catalog=arguments.catalog,
                 schema=arguments.schema,
                 timeout=arguments.timeout,
+                max_retries=arguments.retries,
             ).execute(result.sql)
     except (CompilationError, OSError, json.JSONDecodeError, ValueError, TrinoError) as error:
         if isinstance(error, CompilationError):

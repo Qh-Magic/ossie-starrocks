@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+from email.message import Message
 import unittest
+from urllib.error import HTTPError
 
 from ossie_starrocks import TrinoClient, TrinoError
 
@@ -16,13 +18,16 @@ class _Response(BytesIO):
 
 
 class _Open:
-    def __init__(self, *pages: dict):
+    def __init__(self, *pages: dict | Exception):
         self.pages = list(pages)
         self.requests = []
 
     def __call__(self, request, *, timeout):
         self.requests.append((request, timeout))
-        return _Response(json.dumps(self.pages.pop(0)).encode("utf-8"))
+        page = self.pages.pop(0)
+        if isinstance(page, Exception):
+            raise page
+        return _Response(json.dumps(page).encode("utf-8"))
 
 
 class TrinoClientTests(unittest.TestCase):
@@ -112,6 +117,41 @@ class TrinoClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "only compiler-style"):
             client.execute("DELETE FROM orders")
+
+    def test_retries_transient_http_failures(self):
+        headers = Message()
+        headers["Retry-After"] = "0.2"
+        open_request = _Open(
+            HTTPError("http://trino.test", 503, "unavailable", {}, None),
+            HTTPError("http://trino.test", 429, "busy", headers, None),
+            {"id": "query-5", "columns": [{"name": "x", "type": "bigint"}], "data": [[1]]},
+        )
+        delays = []
+        client = TrinoClient(
+            "http://trino.test",
+            "analyst",
+            _open=open_request,
+            _sleep=delays.append,
+        )
+
+        result = client.execute("SELECT 1")
+
+        self.assertEqual(((1,),), result.rows)
+        self.assertEqual([0.075, 0.2], delays)
+        self.assertEqual(3, len(open_request.requests))
+
+    def test_stops_after_configured_retry_limit(self):
+        failure = HTTPError("http://trino.test", 502, "gateway", {}, None)
+        client = TrinoClient(
+            "http://trino.test",
+            "analyst",
+            max_retries=1,
+            _open=_Open(failure, failure),
+            _sleep=lambda _: None,
+        )
+
+        with self.assertRaisesRegex(TrinoError, "HTTP 502"):
+            client.execute("SELECT 1")
 
 
 if __name__ == "__main__":
