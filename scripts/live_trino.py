@@ -79,6 +79,22 @@ model = {
                         "sql": "CONCAT(UPPER(orderstatus), '-', SPLIT_PART('a-b', '-', 2))"
                     },
                 },
+                {
+                    "name": "status_position",
+                    "expression": {"sql": "CHARINDEX('O', orderstatus)"},
+                },
+                {
+                    "name": "status_contains",
+                    "expression": {"sql": "CONTAINS(orderstatus, 'O')"},
+                },
+                {
+                    "name": "status_starts",
+                    "expression": {"sql": "STARTSWITH(orderstatus, 'F')"},
+                },
+                {
+                    "name": "status_ends",
+                    "expression": {"sql": "ENDSWITH(orderstatus, 'P')"},
+                },
                 {"name": "totalprice", "expression": {"sql": "totalprice"}},
             ],
         },
@@ -154,6 +170,32 @@ assert_same(
     LEFT JOIN tpch.tiny.customer c ON o.custkey = c.custkey
     GROUP BY c.mktsegment
     ORDER BY c.mktsegment
+    """,
+)
+
+string_search = compiler.compile(
+    Query(
+        metrics=("revenue",),
+        dimensions=tuple(
+            f"orders.status_{suffix}"
+            for suffix in ("position", "contains", "starts", "ends")
+        ),
+    ),
+    target="trino",
+)
+assert_same(
+    "required string search functions",
+    string_search.sql + " ORDER BY d0, d1, d2, d3",
+    """
+    SELECT STRPOS(orderstatus, 'O'), STRPOS(orderstatus, 'O') > 0,
+           STRPOS(orderstatus, 'F') = 1,
+           SUBSTRING(orderstatus, -LENGTH('P')) = 'P',
+           ROUND(SUM(totalprice), 2)
+    FROM tpch.tiny.orders
+    GROUP BY STRPOS(orderstatus, 'O'), STRPOS(orderstatus, 'O') > 0,
+             STRPOS(orderstatus, 'F') = 1,
+             SUBSTRING(orderstatus, -LENGTH('P')) = 'P'
+    ORDER BY 1, 2, 3, 4
     """,
 )
 

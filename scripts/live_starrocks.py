@@ -117,6 +117,10 @@ model = {
                         "sql": "CONCAT(UPPER(status), '-', SPLIT_PART('a-b', '-', 2))"
                     },
                 },
+                {"name": "status_position", "expression": {"sql": "CHARINDEX('o', status)"}},
+                {"name": "status_contains", "expression": {"sql": "CONTAINS(status, 'o')"}},
+                {"name": "status_starts", "expression": {"sql": "STARTSWITH(status, 'c')"}},
+                {"name": "status_ends", "expression": {"sql": "ENDSWITH(status, 'e')"}},
                 {"name": "ordered_at", "expression": {"sql": "ordered_at"}},
                 {"name": "order_month", "expression": {"sql": "DATE_TRUNC('month', ordered_at)"}},
             ],
@@ -223,6 +227,29 @@ assert_same(
     FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
     GROUP BY o.status, c.country
     ORDER BY o.status, c.country
+    """,
+)
+
+string_search = compiler.compile(
+    Query(
+        metrics=("revenue",),
+        dimensions=tuple(
+            f"orders.status_{suffix}"
+            for suffix in ("position", "contains", "starts", "ends")
+        ),
+    )
+)
+assert_same(
+    "required string search functions",
+    string_search.sql + " ORDER BY d0, d1, d2, d3",
+    """
+    SELECT STRPOS(status, 'o'), STRPOS(status, 'o') > 0,
+           STRPOS(status, 'c') = 1, RIGHT(status, LENGTH('e')) = 'e',
+           SUM(amount)
+    FROM orders
+    GROUP BY STRPOS(status, 'o'), STRPOS(status, 'o') > 0,
+             STRPOS(status, 'c') = 1, RIGHT(status, LENGTH('e')) = 'e'
+    ORDER BY 1, 2, 3, 4
     """,
 )
 

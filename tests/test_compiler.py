@@ -490,6 +490,38 @@ class CompilerTests(unittest.TestCase):
             self.assertNotIn("STDDEV(t0", sql)
             self.assertNotIn("VARIANCE(t0", sql)
 
+    def test_ossie_03_lowers_required_string_search_functions(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["datasets"][0]["fields"].extend(
+            [
+                {"name": "status_position", "expression": {"sql": "CHARINDEX('o', status)"}},
+                {"name": "status_contains", "expression": {"sql": "CONTAINS(status, 'o')"}},
+                {"name": "status_starts", "expression": {"sql": "STARTSWITH(status, 'c')"}},
+                {"name": "status_ends", "expression": {"sql": "ENDSWITH(status, 'e')"}},
+            ]
+        )
+        query = Query(
+            metrics=("revenue",),
+            dimensions=tuple(
+                f"orders.status_{suffix}"
+                for suffix in ("position", "contains", "starts", "ends")
+            ),
+        )
+
+        starrocks = self.compiler(model).compile(query)
+        trino = self.compiler(model).compile(query, target="trino")
+
+        self.assertIn("STRPOS(t0.`status`, 'o')", starrocks.sql)
+        self.assertIn("(STRPOS(t0.`status`, 'o') > 0)", starrocks.sql)
+        self.assertIn("(STRPOS(t0.`status`, 'c') = 1)", starrocks.sql)
+        self.assertIn("(RIGHT(t0.`status`, LENGTH('e')) = 'e')", starrocks.sql)
+        self.assertIn('STRPOS(t0."status", \'o\')', trino.sql)
+        self.assertIn('(SUBSTRING(t0."status", -(LENGTH(\'e\'))) = \'e\')', trino.sql)
+        for portable_name in ("CHARINDEX(", "CONTAINS(", "STARTSWITH(", "ENDSWITH("):
+            self.assertNotIn(portable_name, starrocks.sql)
+            self.assertNotIn(portable_name, trino.sql)
+
     def test_ossie_03_compiles_required_conditional_functions(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"

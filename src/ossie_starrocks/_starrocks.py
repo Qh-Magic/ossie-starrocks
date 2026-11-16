@@ -310,6 +310,14 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
     raise AssertionError(expression)
 
 def _render_scalar_call(name: str, arguments: tuple[str, ...]) -> str:
+    if name == "CHARINDEX":
+        return f"STRPOS({arguments[1]}, {arguments[0]})"
+    if name == "CONTAINS":
+        return f"(STRPOS({arguments[0]}, {arguments[1]}) > 0)"
+    if name == "STARTSWITH":
+        return f"(STRPOS({arguments[0]}, {arguments[1]}) = 1)"
+    if name == "ENDSWITH":
+        return f"(RIGHT({arguments[0]}, LENGTH({arguments[1]})) = {arguments[1]})"
     if name == "IFF":
         name = "IF"
     elif name == "NVL":
