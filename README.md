@@ -63,6 +63,27 @@ The request file uses this shape.
 
 The command writes SQL to stdout. It writes a JSON diagnostic to stderr and exits with code 2 when compilation fails.
 
+To compile the semantic request and execute it through Trino's official client protocol, use `query`. The JSON result includes the generated SQL, Trino query ID, column metadata, rows, and model dependencies so the execution can be audited.
+
+```sh
+ossie-starrocks query \
+  --model sales.json \
+  --request request.json \
+  --trino-url http://localhost:8080 \
+  --user analyst
+```
+
+The library exposes the same protocol client directly:
+
+```python
+from ossie_starrocks import TrinoClient
+
+executed = TrinoClient("http://localhost:8080", "analyst").execute(result.sql)
+print(executed.query_id, executed.rows)
+```
+
+The client accepts only compiler-style `SELECT` or `WITH` statements and follows Trino `nextUri` pages only on the configured Trino origin. It intentionally does not implement the mutable session state needed by a general-purpose Trino client. Trino query failures are returned as structured diagnostics by the CLI with exit code 3. Authentication and TLS termination remain deployment concerns; do not expose an unauthenticated Trino coordinator publicly.
+
 ## Supported profile
 
 The current release accepts the following model and query features.

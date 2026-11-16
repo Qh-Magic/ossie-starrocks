@@ -5,7 +5,7 @@ import math
 import os
 import subprocess
 
-from ossie_starrocks import Compiler, Query
+from ossie_starrocks import Compiler, Query, TrinoClient
 
 
 CONTAINER = os.environ.get("TRINO_CONTAINER", "ossie-trino-live")
@@ -194,6 +194,16 @@ assert_numeric_close(
     true_division.sql,
     "SELECT COUNT(custkey) * 1.0 / 7 FROM tpch.tiny.orders",
 )
+
+protocol_result = TrinoClient("http://127.0.0.1:8080", "ossie-live").execute(true_division.sql)
+protocol_rows = tuple(tuple(str(value) for value in row) for row in protocol_result.rows)
+expected_protocol_rows = sql(true_division.sql)
+if not protocol_result.query_id or protocol_rows != expected_protocol_rows:
+    raise AssertionError(
+        "Trino client protocol mismatch: "
+        f"query_id={protocol_result.query_id!r}, expected={expected_protocol_rows!r}, actual={protocol_rows!r}"
+    )
+print(f"PASS Trino client protocol with query id {protocol_result.query_id}: {protocol_rows!r}")
 
 staged_true_division = compiler.compile(
     Query(

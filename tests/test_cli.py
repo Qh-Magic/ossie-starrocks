@@ -7,11 +7,47 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest.mock import Mock, patch
 
+from ossie_starrocks import TrinoColumn, TrinoResult
+from ossie_starrocks.cli import main
 from tests.fixtures import sales_model
 
 
 class CliTests(unittest.TestCase):
+    def test_cli_compiles_and_executes_trino_query(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_path = root / "model.json"
+            request_path = root / "request.json"
+            model_path.write_text(json.dumps(sales_model()), encoding="utf-8")
+            request_path.write_text(json.dumps({"metrics": ["revenue"]}), encoding="utf-8")
+            client = Mock()
+            client.execute.return_value = TrinoResult(
+                query_id="query-7",
+                columns=(TrinoColumn("m0", "decimal(38,2)"),),
+                rows=(("255.00",),),
+            )
+            output = StringIO()
+            with patch("ossie_starrocks.cli.TrinoClient", return_value=client), redirect_stdout(output):
+                exit_code = main([
+                    "query",
+                    "--model", str(model_path),
+                    "--request", str(request_path),
+                    "--trino-url", "http://trino.test:8080",
+                    "--user", "analyst",
+                ])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(0, exit_code)
+        self.assertEqual("query-7", payload["queryId"])
+        self.assertEqual([["255.00"]], payload["rows"])
+        self.assertEqual(["orders"], payload["dependencies"])
+        self.assertIn('SUM(t0."amount")', payload["sql"])
+        client.execute.assert_called_once()
+
     def test_cli_matches_library_surface(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

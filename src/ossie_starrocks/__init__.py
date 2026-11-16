@@ -7,6 +7,7 @@ from .compiler import (
     OutputColumn,
     Query,
 )
+from .trino import TrinoClient, TrinoColumn, TrinoError, TrinoResult
 
 __all__ = [
     "CompilationError",
@@ -16,4 +17,8 @@ __all__ = [
     "MetricFilter",
     "OutputColumn",
     "Query",
+    "TrinoClient",
+    "TrinoColumn",
+    "TrinoError",
+    "TrinoResult",
 ]
