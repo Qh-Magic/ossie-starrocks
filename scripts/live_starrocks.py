@@ -121,6 +121,8 @@ model = {
                 {"name": "status_contains", "expression": {"sql": "CONTAINS(status, 'o')"}},
                 {"name": "status_starts", "expression": {"sql": "STARTSWITH(status, 'c')"}},
                 {"name": "status_ends", "expression": {"sql": "ENDSWITH(status, 'e')"}},
+                {"name": "trunc_positive", "expression": {"sql": "TRUNC(123.456, 2)"}},
+                {"name": "trunc_negative", "expression": {"sql": "TRUNCATE(-123.456, 2)"}},
                 {"name": "ordered_at", "expression": {"sql": "ordered_at"}},
                 {"name": "order_month", "expression": {"sql": "DATE_TRUNC('month', ordered_at)"}},
             ],
@@ -227,6 +229,22 @@ assert_same(
     FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id
     GROUP BY o.status, c.country
     ORDER BY o.status, c.country
+    """,
+)
+
+truncation = compiler.compile(
+    Query(
+        metrics=("revenue",),
+        dimensions=("orders.trunc_positive", "orders.trunc_negative"),
+    )
+)
+assert_same(
+    "portable truncation toward zero",
+    truncation.sql,
+    """
+    SELECT 123.45, -123.45, SUM(amount)
+    FROM orders
+    GROUP BY 123.45, -123.45
     """,
 )
 

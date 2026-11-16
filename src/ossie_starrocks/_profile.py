@@ -61,6 +61,8 @@ SUPPORTED_SCALAR_FUNCTIONS = {
     "SQRT": frozenset({1}),
     "SUBSTRING": frozenset({2, 3}),
     "TRIM": frozenset({1}),
+    "TRUNC": frozenset({1, 2}),
+    "TRUNCATE": frozenset({1, 2}),
     "UPPER": frozenset({1}),
     "YEAR": frozenset({1}),
     "ZEROIFNULL": frozenset({1}),

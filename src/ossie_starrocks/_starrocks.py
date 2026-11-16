@@ -310,6 +310,11 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
     raise AssertionError(expression)
 
 def _render_scalar_call(name: str, arguments: tuple[str, ...]) -> str:
+    if name in {"TRUNC", "TRUNCATE"}:
+        value = arguments[0]
+        digits = arguments[1] if len(arguments) == 2 else "0"
+        factor = f"POWER(10, {digits})"
+        return f"(SIGN({value}) * FLOOR(ABS({value}) * {factor}) / {factor})"
     if name == "CHARINDEX":
         return f"LOCATE({arguments[0]}, {arguments[1]})"
     if name == "CONTAINS":

@@ -523,6 +523,36 @@ class CompilerTests(unittest.TestCase):
             self.assertNotIn(portable_name, starrocks.sql)
             self.assertNotIn(portable_name, trino.sql)
 
+    def test_ossie_03_lowers_truncation_toward_zero(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {
+                "name": "positive",
+                "expression": {"sql": "TRUNC(SUM(orders.amount) / 7, 2)"},
+            },
+            {
+                "name": "negative",
+                "expression": {"sql": "TRUNCATE(-(SUM(orders.amount) / 7), 2)"},
+            },
+            {
+                "name": "integer",
+                "expression": {"sql": "TRUNC(SUM(orders.amount) / 7)"},
+            },
+        ]
+        query = Query(metrics=("positive", "negative", "integer"))
+
+        starrocks = self.compiler(model).compile(query)
+        trino = self.compiler(model).compile(query, target="trino")
+
+        for sql in (starrocks.sql, trino.sql):
+            self.assertIn("SIGN(", sql)
+            self.assertIn("FLOOR(ABS(", sql)
+            self.assertIn("POWER(10, 2)", sql)
+            self.assertIn("POWER(10, 0)", sql)
+            self.assertNotIn("TRUNC(", sql)
+            self.assertNotIn("TRUNCATE(", sql)
+
     def test_ossie_03_compiles_required_conditional_functions(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"

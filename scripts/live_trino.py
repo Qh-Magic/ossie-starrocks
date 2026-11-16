@@ -95,6 +95,8 @@ model = {
                     "name": "status_ends",
                     "expression": {"sql": "ENDSWITH(orderstatus, 'P')"},
                 },
+                {"name": "trunc_positive", "expression": {"sql": "TRUNC(123.456, 2)"}},
+                {"name": "trunc_negative", "expression": {"sql": "TRUNCATE(-123.456, 2)"}},
                 {"name": "totalprice", "expression": {"sql": "totalprice"}},
             ],
         },
@@ -170,6 +172,23 @@ assert_same(
     LEFT JOIN tpch.tiny.customer c ON o.custkey = c.custkey
     GROUP BY c.mktsegment
     ORDER BY c.mktsegment
+    """,
+)
+
+truncation = compiler.compile(
+    Query(
+        metrics=("revenue",),
+        dimensions=("orders.trunc_positive", "orders.trunc_negative"),
+    ),
+    target="trino",
+)
+assert_same(
+    "portable truncation toward zero",
+    truncation.sql,
+    """
+    SELECT 123.45, -123.45, ROUND(SUM(totalprice), 2)
+    FROM tpch.tiny.orders
+    GROUP BY 123.45, -123.45
     """,
 )
 
