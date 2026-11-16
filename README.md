@@ -83,7 +83,7 @@ The current release accepts the following model and query features.
 - `SUM`, `COUNT`, `MIN`, `MAX`, `AVG`, required sample/population standard deviation, and required sample/population variance aggregates. Portable `STDDEV` and `VARIANCE` use sample semantics on both targets, including StarRocks where the same native names otherwise mean population statistics.
 - `COUNT(DISTINCT ...)`, `SUM(DISTINCT ...)`, and aggregate `FILTER (WHERE ...)`; filters are lowered to NULL-preserving conditional aggregates for StarRocks.
 - Direct lowering for a verified OSSIE SQL scalar subset: required conditional functions (`COALESCE`, `NULLIF`, `IF`, `IFNULL`) plus the Ossie aliases `IFF`, `NVL`, `NVL2`, `ZEROIFNULL`, and `NULLIFZERO`; string composition, splitting, searching, case/trim/length and substring functions; basic and advanced math functions including portable truncation toward zero; comparison functions; date-part extraction; and `DATE_TRUNC`.
-- Arithmetic above aggregate expressions.
+- Arithmetic above aggregate expressions. Division is lowered as true division even when both operands are integers, matching Ossie semantics instead of Trino integer-division behavior.
 - Structured predicates and conditional expressions: comparisons, `AND`, `OR`, `NOT`, `IS [NOT] NULL`, `IN`, `BETWEEN`, `LIKE` and their `NOT` forms, searched `CASE WHEN`, unary signs, and modulo.
 - Relationships whose target columns match a declared primary key or unique key.
 - Queries with one metric grain, dimensions, field filters, metric filters, and a limit.

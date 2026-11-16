@@ -172,7 +172,11 @@ def _render_multistage_expr(expression: Expr, stages: dict[str, str], stage_by_k
     if isinstance(expression, ExprLiteral):
         return _literal(expression.value)
     if isinstance(expression, Binary):
-        return f"({_render_multistage_expr(expression.left, stages, stage_by_key)} {expression.op} {_render_multistage_expr(expression.right, stages, stage_by_key)})"
+        return _render_binary(
+            expression.op,
+            _render_multistage_expr(expression.left, stages, stage_by_key),
+            _render_multistage_expr(expression.right, stages, stage_by_key),
+        )
     if isinstance(expression, Unary):
         separator = " " if expression.op == "NOT" else ""
         return f"({expression.op}{separator}{_render_multistage_expr(expression.operand, stages, stage_by_key)})"
@@ -224,7 +228,11 @@ def _render_empty_input(expression: Expr) -> str:
     if isinstance(expression, MeasureRef):
         return _render_empty_input(expression.expression)
     if isinstance(expression, Binary):
-        return f"({_render_empty_input(expression.left)} {expression.op} {_render_empty_input(expression.right)})"
+        return _render_binary(
+            expression.op,
+            _render_empty_input(expression.left),
+            _render_empty_input(expression.right),
+        )
     if isinstance(expression, Unary):
         separator = " " if expression.op == "NOT" else ""
         return f"({expression.op}{separator}{_render_empty_input(expression.operand)})"
@@ -263,7 +271,11 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
     if isinstance(expression, Star):
         return "*"
     if isinstance(expression, Binary):
-        return f"({_render_expr(expression.left, aliases)} {expression.op} {_render_expr(expression.right, aliases)})"
+        return _render_binary(
+            expression.op,
+            _render_expr(expression.left, aliases),
+            _render_expr(expression.right, aliases),
+        )
     if isinstance(expression, Unary):
         separator = " " if expression.op == "NOT" else ""
         return f"({expression.op}{separator}{_render_expr(expression.operand, aliases)})"
@@ -334,6 +346,11 @@ def _render_scalar_call(name: str, arguments: tuple[str, ...]) -> str:
     elif name == "NULLIFZERO":
         return f"NULLIF({arguments[0]}, 0)"
     return f"{name}({', '.join(arguments)})"
+
+def _render_binary(operator: str, left: str, right: str) -> str:
+    if operator == "/":
+        return f"(({left} * 1.0) / {right})"
+    return f"({left} {operator} {right})"
 
 def _render_aggregate_name(name: str) -> str:
     return {

@@ -553,6 +553,31 @@ class CompilerTests(unittest.TestCase):
             self.assertNotIn("TRUNC(", sql)
             self.assertNotIn("TRUNCATE(", sql)
 
+    def test_ossie_03_lowers_integer_division_to_true_division(self):
+        model = sales_model()
+        model["version"] = "0.3.0.dev0"
+        model["metrics"] = [
+            {
+                "name": "count_sevenths",
+                "expression": {"sql": "COUNT(orders.customer_id) / 7"},
+            },
+            {
+                "name": "orders_per_customer",
+                "expression": {
+                    "sql": "COUNT(orders.customer_id) / COUNT(customers.customer_id)"
+                },
+            },
+        ]
+
+        direct = self.compiler(model).compile(Query(metrics=("count_sevenths",)), target="trino")
+        staged = self.compiler(model).compile(
+            Query(metrics=("orders_per_customer",), dimensions=("customers.country",)),
+            target="trino",
+        )
+
+        self.assertIn('((COUNT(t0."customer_id") * 1.0) / 7)', direct.sql)
+        self.assertIn(" * 1.0) / CASE WHEN s1.", staged.sql)
+
     def test_ossie_03_compiles_required_conditional_functions(self):
         model = sales_model()
         model["version"] = "0.3.0.dev0"
@@ -568,7 +593,7 @@ class CompilerTests(unittest.TestCase):
         result = self.compile(model, Query(metrics=("safe_average",)))
 
         self.assertIn(
-            "COALESCE((SUM(t0.`amount`) / NULLIF(COUNT(t0.`customer_id`), 0)), 0)",
+            "COALESCE(((SUM(t0.`amount`) * 1.0) / NULLIF(COUNT(t0.`customer_id`), 0)), 0)",
             result.sql,
         )
 
@@ -932,7 +957,7 @@ class CompilerTests(unittest.TestCase):
 
         result = self.compile(model, Query(metrics=("average_order_value",)))
 
-        self.assertIn("(SUM(t0.`amount`) / COUNT(t0.`customer_id`))", result.sql)
+        self.assertIn("((SUM(t0.`amount`) * 1.0) / COUNT(t0.`customer_id`))", result.sql)
         self.assertNotIn("AGG(", result.sql)
 
     def test_ossie_03_plans_global_cross_grain_agg_in_stages(self):
@@ -965,7 +990,8 @@ class CompilerTests(unittest.TestCase):
             "`default_catalog`.`sales`.`customers` AS t0)",
             result.sql,
         )
-        self.assertIn("SELECT (CASE WHEN s0.`present` IS NULL THEN 0", result.sql)
+        self.assertIn("SELECT ((CASE WHEN s0.`present` IS NULL THEN 0", result.sql)
+        self.assertIn("END * 1.0) / CASE WHEN s1.", result.sql)
         self.assertIn("FROM s0 CROSS JOIN s1", result.sql)
         self.assertEqual(("orders", "customers"), result.dependencies)
 
@@ -992,7 +1018,10 @@ class CompilerTests(unittest.TestCase):
         self.assertIn("SUM(t0.`amount`) AS `value`, 1 AS `present`", result.sql)
         self.assertIn("COUNT(t0.`customer_id`) AS `value`, 1 AS `present`", result.sql)
         self.assertIn("FULL OUTER JOIN s1", result.sql)
-        self.assertIn("THEN NULL ELSE s0.`value` END / CASE WHEN s1.`present` IS NULL THEN 0", result.sql)
+        self.assertIn(
+            "THEN NULL ELSE s0.`value` END * 1.0) / CASE WHEN s1.`present` IS NULL THEN 0",
+            result.sql,
+        )
 
     def test_ossie_03_rejects_aggregate_component_that_reads_two_datasets(self):
         model = sales_model()
@@ -1113,7 +1142,7 @@ class CompilerTests(unittest.TestCase):
             ),
         )
 
-        self.assertIn("WHERE (CASE WHEN s0.`present` IS NULL THEN 0", result.sql)
+        self.assertIn("WHERE ((CASE WHEN s0.`present` IS NULL THEN 0", result.sql)
         self.assertIn("CASE WHEN s1.`present` IS NULL THEN 0 ELSE s1.`value` END) > 1", result.sql)
 
     def test_ossie_03_rejects_agg_of_a_field(self):

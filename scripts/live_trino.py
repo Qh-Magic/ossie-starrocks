@@ -154,6 +154,16 @@ model = {
                 )
             },
         },
+        {
+            "name": "count_sevenths",
+            "expression": {"sql": "COUNT(orders.custkey) / 7"},
+        },
+        {
+            "name": "orders_per_customer_count",
+            "expression": {
+                "sql": "COUNT(orders.custkey) / COUNT(customers.custkey)"
+            },
+        },
     ],
 }
 
@@ -172,6 +182,46 @@ assert_same(
     LEFT JOIN tpch.tiny.customer c ON o.custkey = c.custkey
     GROUP BY c.mktsegment
     ORDER BY c.mktsegment
+    """,
+)
+
+true_division = compiler.compile(
+    Query(metrics=("count_sevenths",)),
+    target="trino",
+)
+assert_numeric_close(
+    "portable true division for integer aggregates",
+    true_division.sql,
+    "SELECT COUNT(custkey) * 1.0 / 7 FROM tpch.tiny.orders",
+)
+
+staged_true_division = compiler.compile(
+    Query(
+        metrics=("orders_per_customer_count",),
+        dimensions=("customers.mktsegment",),
+    ),
+    target="trino",
+)
+assert_numeric_close(
+    "portable true division after stage stitching",
+    staged_true_division.sql + " ORDER BY d0",
+    """
+    WITH order_stage AS (
+        SELECT c.mktsegment, COUNT(o.custkey) AS value
+        FROM tpch.tiny.orders o
+        LEFT JOIN tpch.tiny.customer c ON o.custkey = c.custkey
+        GROUP BY c.mktsegment
+    ), customer_stage AS (
+        SELECT mktsegment, COUNT(custkey) AS value
+        FROM tpch.tiny.customer
+        GROUP BY mktsegment
+    )
+    SELECT COALESCE(order_stage.mktsegment, customer_stage.mktsegment),
+           order_stage.value * 1.0 / customer_stage.value
+    FROM order_stage
+    FULL OUTER JOIN customer_stage
+      ON order_stage.mktsegment IS NOT DISTINCT FROM customer_stage.mktsegment
+    ORDER BY 1
     """,
 )
 
