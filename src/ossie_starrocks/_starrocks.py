@@ -349,7 +349,7 @@ def _render_scalar_call(name: str, arguments: tuple[str, ...]) -> str:
 
 def _render_binary(operator: str, left: str, right: str) -> str:
     if operator == "/":
-        return f"(({left} * 1.0) / {right})"
+        return f"DIVIDE({left}, {right})"
     return f"({left} {operator} {right})"
 
 def _render_aggregate_name(name: str) -> str:

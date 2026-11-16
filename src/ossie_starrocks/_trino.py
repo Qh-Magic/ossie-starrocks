@@ -61,6 +61,16 @@ def _to_trino_sql(sql: str) -> str:
         upper = token.upper()
         next_position = match.end()
         call_start = _next_non_space_position(sql, next_position)
+        if upper == "DIVIDE" and call_start < len(sql) and sql[call_start] == "(":
+            call_end = _parenthesized_end(sql, call_start)
+            arguments = _split_arguments(sql[call_start + 1 : call_end - 1])
+            if len(arguments) != 2:
+                raise CompilationError("INTERNAL_ERROR", "$.sql", "invalid DIVIDE call")
+            dividend = _to_trino_sql(arguments[0])
+            divisor = _to_trino_sql(arguments[1])
+            output.append(f"(CAST({dividend} AS DOUBLE) / {divisor})")
+            position = call_end
+            continue
         if upper == "LOCATE" and call_start < len(sql) and sql[call_start] == "(":
             call_end = _parenthesized_end(sql, call_start)
             arguments = _split_arguments(sql[call_start + 1 : call_end - 1])

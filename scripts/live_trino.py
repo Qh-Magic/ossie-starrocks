@@ -192,7 +192,7 @@ true_division = compiler.compile(
 assert_numeric_close(
     "portable true division for integer aggregates",
     true_division.sql,
-    "SELECT COUNT(custkey) * 1.0 / 7 FROM tpch.tiny.orders",
+    "SELECT CAST(COUNT(custkey) AS DOUBLE) / 7 FROM tpch.tiny.orders",
 )
 
 protocol_result = TrinoClient("http://127.0.0.1:8080", "ossie-live").execute(true_division.sql)
@@ -203,6 +203,8 @@ if not protocol_result.query_id or protocol_rows != expected_protocol_rows:
         "Trino client protocol mismatch: "
         f"query_id={protocol_result.query_id!r}, expected={expected_protocol_rows!r}, actual={protocol_rows!r}"
     )
+if not math.isclose(float(protocol_result.rows[0][0]), 15000 / 7, rel_tol=1e-12):
+    raise AssertionError(f"true division lost precision: {protocol_result.rows!r}")
 print(f"PASS Trino client protocol with query id {protocol_result.query_id}: {protocol_rows!r}")
 
 staged_true_division = compiler.compile(
@@ -227,7 +229,7 @@ assert_numeric_close(
         GROUP BY mktsegment
     )
     SELECT COALESCE(order_stage.mktsegment, customer_stage.mktsegment),
-           order_stage.value * 1.0 / customer_stage.value
+           CAST(order_stage.value AS DOUBLE) / customer_stage.value
     FROM order_stage
     FULL OUTER JOIN customer_stage
       ON order_stage.mktsegment IS NOT DISTINCT FROM customer_stage.mktsegment
