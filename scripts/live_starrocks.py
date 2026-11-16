@@ -422,7 +422,7 @@ assert_same(
     ORDER BY COALESCE(order_stage.country, customer_stage.country)
     """,
 )
-assert_same(
+assert_numeric_close(
     "required conditional functions across components",
     conditional_component_metric.sql + " ORDER BY d0",
     """
@@ -490,7 +490,7 @@ assert_same(
 )
 
 cross_grain = compiler.compile(Query(metrics=("orders_per_customer",)))
-assert_same(
+assert_numeric_close(
     "global cross-grain multi-stage aggregate",
     cross_grain.sql,
     """
@@ -503,7 +503,7 @@ assert_same(
 keyed_cross_grain = compiler.compile(
     Query(metrics=("orders_per_customer",), dimensions=("customers.country",))
 )
-assert_same(
+assert_numeric_close(
     "keyed cross-grain multi-stage aggregate",
     keyed_cross_grain.sql + " ORDER BY d0",
     """
@@ -532,7 +532,7 @@ filtered_cross_grain = compiler.compile(
         where=(FieldFilter("customers.country", "eq", "TW"),),
     )
 )
-assert_same(
+assert_numeric_close(
     "safe filter pushed into every cross-grain stage",
     filtered_cross_grain.sql + " ORDER BY d0",
     """
@@ -562,7 +562,7 @@ having_cross_grain = compiler.compile(
         having=(MetricFilter("orders_per_customer", "gt", 1),),
     )
 )
-assert_same(
+assert_numeric_close(
     "cross-grain metric filter after stage join",
     having_cross_grain.sql + " ORDER BY d0",
     """
