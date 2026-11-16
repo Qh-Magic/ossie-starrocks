@@ -1,5 +1,0 @@
-services:
-  trino:
-    image: trinodb/trino:476
-    ports:
-      - "8080:8080"

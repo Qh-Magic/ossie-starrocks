@@ -5,7 +5,6 @@ import hashlib
 from pathlib import Path
 import tempfile
 import unittest
-from datetime import datetime
 
 from ossie_starrocks import (
     CompilationError,
@@ -464,15 +463,11 @@ class CompilerTests(unittest.TestCase):
             }
         ]
 
-        starrocks = self.compiler(model).compile(
+        result = self.compiler(model).compile(
             Query(metrics=("math_profile",), dimensions=("orders.status_label",))
         )
-        trino = self.compiler(model).compile(
-            Query(metrics=("math_profile",), dimensions=("orders.status_label",)),
-            target="trino",
-        )
 
-        for sql in (starrocks.sql, trino.sql):
+        for sql in (result.sql,):
             self.assertIn("CONCAT(UPPER(", sql)
             self.assertIn("SPLIT_PART('a-b', '-', 2)", sql)
             self.assertIn("GREATEST(MOD(COUNT(", sql)
@@ -502,10 +497,9 @@ class CompilerTests(unittest.TestCase):
         ]
         query = Query(metrics=tuple(metric["name"] for metric in model["metrics"]))
 
-        starrocks = self.compiler(model).compile(query)
-        trino = self.compiler(model).compile(query, target="trino")
+        result = self.compiler(model).compile(query)
 
-        for sql in (starrocks.sql, trino.sql):
+        for sql in (result.sql,):
             self.assertIn("STDDEV_SAMP(", sql)
             self.assertIn("STDDEV_POP(", sql)
             self.assertIn("VAR_SAMP(", sql)
@@ -532,19 +526,14 @@ class CompilerTests(unittest.TestCase):
             ),
         )
 
-        starrocks = self.compiler(model).compile(query)
-        trino = self.compiler(model).compile(query, target="trino")
+        result = self.compiler(model).compile(query)
 
-        self.assertIn("LOCATE('o', t0.`status`)", starrocks.sql)
-        self.assertIn("(LOCATE('o', t0.`status`) > 0)", starrocks.sql)
-        self.assertIn("(LOCATE('c', t0.`status`) = 1)", starrocks.sql)
-        self.assertIn("(RIGHT(t0.`status`, LENGTH('e')) = 'e')", starrocks.sql)
-        self.assertIn('STRPOS(t0."status", \'o\')', trino.sql)
-        self.assertNotIn("LOCATE(", trino.sql)
-        self.assertIn('(SUBSTRING(t0."status", -(LENGTH(\'e\'))) = \'e\')', trino.sql)
+        self.assertIn("LOCATE('o', t0.`status`)", result.sql)
+        self.assertIn("(LOCATE('o', t0.`status`) > 0)", result.sql)
+        self.assertIn("(LOCATE('c', t0.`status`) = 1)", result.sql)
+        self.assertIn("(RIGHT(t0.`status`, LENGTH('e')) = 'e')", result.sql)
         for portable_name in ("CHARINDEX(", "CONTAINS(", "STARTSWITH(", "ENDSWITH("):
-            self.assertNotIn(portable_name, starrocks.sql)
-            self.assertNotIn(portable_name, trino.sql)
+            self.assertNotIn(portable_name, result.sql)
 
     def test_ossie_03_lowers_truncation_toward_zero(self):
         model = sales_model()
@@ -565,10 +554,9 @@ class CompilerTests(unittest.TestCase):
         ]
         query = Query(metrics=("positive", "negative", "integer"))
 
-        starrocks = self.compiler(model).compile(query)
-        trino = self.compiler(model).compile(query, target="trino")
+        result = self.compiler(model).compile(query)
 
-        for sql in (starrocks.sql, trino.sql):
+        for sql in (result.sql,):
             self.assertIn("SIGN(", sql)
             self.assertIn("FLOOR(ABS(", sql)
             self.assertIn("POWER(10, 2)", sql)
@@ -592,15 +580,13 @@ class CompilerTests(unittest.TestCase):
             },
         ]
 
-        direct = self.compiler(model).compile(Query(metrics=("count_sevenths",)), target="trino")
+        direct = self.compiler(model).compile(Query(metrics=("count_sevenths",)))
         staged = self.compiler(model).compile(
             Query(metrics=("orders_per_customer",), dimensions=("customers.country",)),
-            target="trino",
         )
 
-        self.assertIn('CAST(COUNT(t0."customer_id") AS DOUBLE) / 7', direct.sql)
-        self.assertIn("CAST(CASE WHEN s0.", staged.sql)
-        self.assertIn("AS DOUBLE) / CASE WHEN s1.", staged.sql)
+        self.assertIn("DIVIDE(COUNT(t0.`customer_id`), 7)", direct.sql)
+        self.assertIn("DIVIDE(CASE WHEN s0.", staged.sql)
 
     def test_ossie_03_compiles_required_conditional_functions(self):
         model = sales_model()
@@ -667,116 +653,6 @@ class CompilerTests(unittest.TestCase):
         self.assertIn("NULLIF(CASE WHEN s1.`present` IS NULL", result.sql)
         self.assertNotIn("NVL(", result.sql)
         self.assertNotIn("NULLIFZERO(", result.sql)
-
-    def test_compiles_the_same_semantic_plan_for_trino(self):
-        model = sales_model()
-
-        result = self.compiler(model).compile(
-            Query(
-                metrics=("revenue",),
-                dimensions=("customers.country",),
-                where=(FieldFilter("orders.status", "eq", "complete"),),
-            ),
-            target="trino",
-        )
-
-        self.assertIn('SUM(t0."amount") AS "m0"', result.sql)
-        self.assertIn(
-            'LEFT JOIN "default_catalog"."sales"."customers" AS t1',
-            result.sql,
-        )
-        self.assertIn('WHERE t0."status" = \'complete\'', result.sql)
-        self.assertNotIn("`", result.sql)
-
-    def test_trino_target_lowers_cross_dataset_conditional_metric(self):
-        model = sales_model()
-        model["version"] = "0.3.0.dev0"
-        model["metrics"] = [
-            {
-                "name": "safe_ratio",
-                "expression": {
-                    "sql": "NVL(SUM(orders.amount), 0) / NULLIFZERO(COUNT(customers.customer_id))"
-                },
-            }
-        ]
-
-        result = self.compiler(model).compile(
-            Query(metrics=("safe_ratio",), dimensions=("customers.country",)),
-            target="trino",
-        )
-
-        self.assertIn('COALESCE(CASE WHEN s0."present" IS NULL', result.sql)
-        self.assertIn('FULL OUTER JOIN s1', result.sql)
-        self.assertIn(
-            '(s0."k0" = s1."k0" OR (s0."k0" IS NULL AND s1."k0" IS NULL))',
-            result.sql,
-        )
-        self.assertNotIn('COALESCE(s0."k0")', result.sql)
-        self.assertNotIn("IFNULL", result.sql)
-        self.assertNotIn("`", result.sql)
-
-    def test_trino_target_uses_timestamp_type(self):
-        model = sales_model()
-        model["datasets"][0]["fields"].append(field("ordered_at", "ordered_at"))
-
-        result = self.compiler(model).compile(
-            Query(
-                metrics=("revenue",),
-                where=(FieldFilter("orders.ordered_at", "ge", datetime(2026, 1, 1, 12, 30)),),
-            ),
-            target="trino",
-        )
-
-        self.assertIn("CAST('2026-01-01 12:30:00' AS TIMESTAMP)", result.sql)
-        self.assertNotIn("DATETIME", result.sql)
-
-    def test_trino_target_does_not_rewrite_string_literals(self):
-        model = sales_model()
-
-        result = self.compiler(model).compile(
-            Query(
-                metrics=("revenue",),
-                where=(FieldFilter("orders.status", "eq", "IFNULL DATETIME `literal`"),),
-            ),
-            target="trino",
-        )
-
-        self.assertIn("'IFNULL DATETIME `literal`'", result.sql)
-
-    def test_rejects_unknown_sql_target(self):
-        with self.assertRaises(CompilationError) as caught:
-            self.compiler(sales_model()).compile(
-                Query(metrics=("revenue",)),
-                target="duckdb",  # type: ignore[arg-type]
-            )
-
-        self.assertEqual("INVALID_TARGET", caught.exception.code)
-
-    def test_trino_target_lowers_string_edge_functions(self):
-        model = sales_model()
-        model["version"] = "0.3.0.dev0"
-        model["datasets"][0]["fields"].extend(
-            [
-                {"name": "status_prefix", "expression": {"sql": "LEFT(status, 2)"}},
-                {
-                    "name": "status_suffix",
-                    "expression": {"sql": "RIGHT(UPPER(status), 3)"},
-                },
-            ]
-        )
-
-        result = self.compiler(model).compile(
-            Query(
-                metrics=("revenue",),
-                dimensions=("orders.status_prefix", "orders.status_suffix"),
-            ),
-            target="trino",
-        )
-
-        self.assertIn('SUBSTRING(t0."status", 1, 2)', result.sql)
-        self.assertIn('SUBSTRING(UPPER(t0."status"), -(3))', result.sql)
-        self.assertNotIn("LEFT(", result.sql)
-        self.assertNotIn("RIGHT(", result.sql)
 
     def test_ossie_03_validates_conditional_function_arity(self):
         model = sales_model()

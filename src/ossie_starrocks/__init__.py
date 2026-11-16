@@ -8,8 +8,6 @@ from .compiler import (
     OutputColumn,
     Query,
 )
-from .trino import TrinoClient, TrinoColumn, TrinoError, TrinoResult
-
 __all__ = [
     "CompilationError",
     "CompiledQuery",
@@ -19,8 +17,4 @@ __all__ = [
     "ModelIdentity",
     "OutputColumn",
     "Query",
-    "TrinoClient",
-    "TrinoColumn",
-    "TrinoError",
-    "TrinoResult",
 ]

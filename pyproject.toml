@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ossie-starrocks"
 version = "0.1.0"
-description = "Fail-closed Apache Ossie semantic compiler for StarRocks and Trino"
+description = "Fail-closed Apache Ossie semantic compiler for StarRocks"
 requires-python = ">=3.11"
 dependencies = ["jsonschema>=4.18,<5"]
 
@@ -14,7 +14,6 @@ yaml = ["PyYAML>=6"]
 
 [project.scripts]
 ossie-starrocks = "ossie_starrocks.cli:main"
-ossie-gateway = "ossie_starrocks.gateway:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

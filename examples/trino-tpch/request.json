@@ -1,5 +1,0 @@
-{
-  "metrics": ["revenue"],
-  "dimensions": ["customers.mktsegment"],
-  "limit": 10
-}
