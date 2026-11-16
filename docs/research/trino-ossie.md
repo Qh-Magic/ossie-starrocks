@@ -36,7 +36,7 @@ result = compiler.compile(query, target="trino")
 
 CLI 對應為 `ossie-starrocks compile ... --target trino`。GitHub 的 `live-trino` workflow 會在官方 Trino 容器內，把產生的 SQL 和手寫 baseline SQL 對同一份 TPCH 資料執行並比較結果。這是外部 semantic compiler PoC，不代表 Trino 已原生支援 Ossie，也不會改變下文對官方整合狀態的判斷。
 
-儲存庫也提供 `ossie-starrocks query` 與 `TrinoClient`，可將同一條已驗證、唯讀的 `SELECT`／`WITH` SQL 透過 Trino `/v1/statement` client protocol 執行、沿 `nextUri` 讀完結果，並回傳 query ID、欄位 metadata 與資料列。這讓 PoC 涵蓋「編譯＋執行＋基本稽核關聯」，但不是完整的一般用途 Trino client 或多租戶 gateway；正式環境仍須另外處理身分驗證、授權、資源群組、retry policy、session state、timeout policy 與持久化 audit log。
+儲存庫也提供 `ossie-starrocks query`、`TrinoClient` 與最小的 `ossie-gateway`。它們可將同一條已驗證、唯讀的 `SELECT`／`WITH` SQL 透過 Trino `/v1/statement` client protocol 執行、沿 `nextUri` 讀完結果，並回傳 query ID、欄位 metadata 與資料列。Gateway 固定載入一份模型，只接收 Layer 3 request JSON，要求 Bearer token，並限制 request body、執行時間與結果列數。這讓 PoC 涵蓋「HTTP 語意 API＋編譯＋執行＋基本稽核關聯」，但仍不是完整的多租戶平台；正式環境還要補模型級／欄位級授權、資源群組、持久化 audit log、TLS 與 identity-aware proxy。
 
 理由如下：
 

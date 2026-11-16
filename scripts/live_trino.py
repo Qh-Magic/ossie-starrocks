@@ -7,8 +7,11 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
+from urllib.request import Request, urlopen
 
 from ossie_starrocks import Compiler, Query, TrinoClient, TrinoError
+from ossie_starrocks.gateway import SemanticGateway, create_server
 
 
 CONTAINER = os.environ.get("TRINO_CONTAINER", "ossie-trino-live")
@@ -249,6 +252,41 @@ if (
 print(
     f"PASS published Trino quickstart with query id {quickstart_result['queryId']}: "
     f"{len(quickstart_result['rows'])} rows"
+)
+
+gateway_body = Path("examples/trino-tpch/request.json").read_bytes()
+gateway = SemanticGateway(
+    Compiler.from_file("examples/trino-tpch/model.json"),
+    TrinoClient("http://127.0.0.1:8080", "ossie-gateway-live"),
+    trino_user="ossie-gateway-live",
+    bearer_token="live-test-token",
+)
+gateway_server = create_server("127.0.0.1", 0, gateway)
+gateway_thread = threading.Thread(target=gateway_server.serve_forever, daemon=True)
+gateway_thread.start()
+try:
+    gateway_request = Request(
+        f"http://127.0.0.1:{gateway_server.server_address[1]}/v1/query",
+        data=gateway_body,
+        headers={"Authorization": "Bearer live-test-token", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(gateway_request, timeout=30) as response:
+        gateway_result = json.load(response)
+finally:
+    gateway_server.shutdown()
+    gateway_server.server_close()
+    gateway_thread.join(timeout=5)
+if (
+    not gateway_result.get("queryId")
+    or len(gateway_result.get("rows", [])) != 5
+    or gateway_result.get("audit", {}).get("requestSha256") != hashlib.sha256(gateway_body).hexdigest()
+    or gateway_result.get("audit", {}).get("trinoUser") != "ossie-gateway-live"
+):
+    raise AssertionError(f"semantic gateway returned an unexpected result: {gateway_result!r}")
+print(
+    f"PASS authenticated semantic gateway through Trino with query id {gateway_result['queryId']}: "
+    f"{len(gateway_result['rows'])} rows"
 )
 
 try:

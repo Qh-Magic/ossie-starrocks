@@ -42,6 +42,30 @@ ossie-starrocks query \
 
 The result contains five market-segment rows, the generated Trino SQL, and the Trino query ID. Its `audit` object records the model name, Ossie version, SHA-256 fingerprints for the exact model and request files, Trino user, dependencies, SQL, and query ID. Stop the demo with `docker compose -f examples/trino-tpch/compose.yaml down`.
 
+## Semantic gateway
+
+For applications that should submit semantic requests without receiving direct Trino credentials, run the included HTTP gateway. It loads one Ossie model at startup and accepts only the same controlled request shape used by the CLI.
+
+```sh
+export OSSIE_GATEWAY_TOKEN='replace-with-a-secret'
+
+ossie-gateway \
+  --model examples/trino-tpch/model.json \
+  --trino-url http://localhost:8080 \
+  --user ossie-gateway
+```
+
+The gateway listens on `127.0.0.1:8081` by default. Submit the example request with:
+
+```sh
+curl --fail-with-body http://127.0.0.1:8081/v1/query \
+  -H 'Authorization: Bearer replace-with-a-secret' \
+  -H 'Content-Type: application/json' \
+  --data-binary @examples/trino-tpch/request.json
+```
+
+`GET /healthz` reports the loaded model identity. `POST /v1/query` requires a Bearer token, enforces a 1 MiB request-body limit by default, compiles only the supported semantic request into Trino SQL, and retains the existing server timeout, HTTP retry, result-row cap, query ID, and audit metadata controls. The token is read from `OSSIE_GATEWAY_TOKEN`, or from the environment-variable name selected by `--token-env`; it is intentionally not accepted as a command-line value. Put TLS and an identity-aware proxy in front of the service before exposing it beyond a trusted host.
+
 ## Compile a request
 
 ```python

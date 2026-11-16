@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 import sys
 
-from .compiler import CompilationError, Compiler, FieldFilter, MetricFilter, Query
+from .compiler import CompilationError, Compiler
+from .execution import execution_payload
+from .request import query_from_mapping
 from .trino import TrinoClient, TrinoError
 
 
@@ -63,25 +65,13 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.command == "compile":
         print(result.sql)
     else:
-        identity = compiler.model_identity
-        print(json.dumps({
-            "queryId": executed.query_id,
-            "columns": [{"name": column.name, "type": column.type} for column in executed.columns],
-            "rows": executed.rows,
-            "sql": result.sql,
-            "dependencies": result.dependencies,
-            "audit": {
-                "modelName": identity.name,
-                "modelVersion": identity.version,
-                "modelSha256": identity.sha256,
-                "requestSha256": _file_sha256(arguments.request),
-                "target": "trino",
-                "trinoUser": arguments.user,
-                "queryId": executed.query_id,
-                "dependencies": result.dependencies,
-                "sql": result.sql,
-            },
-        }))
+        print(json.dumps(execution_payload(
+            compiler,
+            result,
+            executed,
+            trino_user=arguments.user,
+            request_sha256=_file_sha256(arguments.request),
+        )))
     return 0
 
 
@@ -94,44 +84,9 @@ def _file_sha256(path: str) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def _read_query(path: str) -> Query:
+def _read_query(path: str):
     request = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(request, dict):
-        raise CompilationError("INVALID_REQUEST", "$", "request must be an object")
-    return Query(
-        metrics=_strings(request.get("metrics", []), "$.metrics"),
-        dimensions=_strings(request.get("dimensions", []), "$.dimensions"),
-        filter=request.get("filter"),
-        where=tuple(_field_filter(item, index) for index, item in enumerate(_objects(request.get("where", []), "$.where"))),
-        having=tuple(_metric_filter(item, index) for index, item in enumerate(_objects(request.get("having", []), "$.having"))),
-        limit=request.get("limit"),
-    )
-
-
-def _strings(value: object, location: str) -> tuple[str, ...]:
-    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-        raise CompilationError("INVALID_REQUEST", location, "expected an array of strings")
-    return tuple(value)
-
-
-def _objects(value: object, location: str) -> list[dict]:
-    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
-        raise CompilationError("INVALID_REQUEST", location, "expected an array of objects")
-    return value
-
-
-def _field_filter(item: dict, index: int) -> FieldFilter:
-    try:
-        return FieldFilter(item["field"], item["op"], item.get("value"))
-    except KeyError as error:
-        raise CompilationError("INVALID_REQUEST", f"$.where[{index}]", f"missing {error.args[0]}") from error
-
-
-def _metric_filter(item: dict, index: int) -> MetricFilter:
-    try:
-        return MetricFilter(item["metric"], item["op"], item.get("value"))
-    except KeyError as error:
-        raise CompilationError("INVALID_REQUEST", f"$.having[{index}]", f"missing {error.args[0]}") from error
+    return query_from_mapping(request)
 
 
 if __name__ == "__main__":
