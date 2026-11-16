@@ -4,6 +4,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 
 from ossie_starrocks import Compiler, Query, TrinoClient
 
@@ -206,6 +207,35 @@ if not protocol_result.query_id or protocol_rows != expected_protocol_rows:
 if not math.isclose(float(protocol_result.rows[0][0]), 15000 / 7, rel_tol=1e-12):
     raise AssertionError(f"true division lost precision: {protocol_result.rows!r}")
 print(f"PASS Trino client protocol with query id {protocol_result.query_id}: {protocol_rows!r}")
+
+quickstart = subprocess.run(
+    [
+        sys.executable,
+        "-m",
+        "ossie_starrocks.cli",
+        "query",
+        "--model",
+        "examples/trino-tpch/model.json",
+        "--request",
+        "examples/trino-tpch/request.json",
+        "--trino-url",
+        "http://127.0.0.1:8080",
+        "--user",
+        "ossie-live",
+    ],
+    text=True,
+    capture_output=True,
+    check=False,
+)
+if quickstart.returncode != 0:
+    raise AssertionError(f"quickstart failed: {quickstart.stderr}")
+quickstart_result = json.loads(quickstart.stdout)
+if not quickstart_result.get("queryId") or len(quickstart_result.get("rows", [])) != 5:
+    raise AssertionError(f"quickstart returned an unexpected result: {quickstart_result!r}")
+print(
+    f"PASS published Trino quickstart with query id {quickstart_result['queryId']}: "
+    f"{len(quickstart_result['rows'])} rows"
+)
 
 staged_true_division = compiler.compile(
     Query(

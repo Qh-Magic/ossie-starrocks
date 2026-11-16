@@ -20,6 +20,28 @@ To load YAML models, install the optional dependency.
 python3 -m pip install -e '.[yaml]'
 ```
 
+## Trino quickstart
+
+The repository includes a complete Ossie model and semantic request backed by Trino's built-in TPCH tiny catalog.
+
+```sh
+docker compose -f examples/trino-tpch/compose.yaml up -d
+
+# Wait until the catalog and worker are ready.
+until docker compose -f examples/trino-tpch/compose.yaml exec -T trino \
+  trino --execute 'SELECT count(*) FROM tpch.tiny.orders' >/dev/null 2>&1; do
+  sleep 2
+done
+
+ossie-starrocks query \
+  --model examples/trino-tpch/model.json \
+  --request examples/trino-tpch/request.json \
+  --trino-url http://localhost:8080 \
+  --user analyst
+```
+
+The result contains five market-segment rows, the generated Trino SQL, and the Trino query ID. Stop the demo with `docker compose -f examples/trino-tpch/compose.yaml down`.
+
 ## Compile a request
 
 ```python
