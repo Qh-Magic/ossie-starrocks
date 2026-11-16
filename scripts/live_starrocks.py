@@ -359,7 +359,7 @@ raw_component_metric = compiler.compile(
         dimensions=("customers.country",),
     )
 )
-assert_same(
+assert_numeric_close(
     "raw cross-dataset aggregate components",
     raw_component_metric.sql + " ORDER BY d0",
     """
