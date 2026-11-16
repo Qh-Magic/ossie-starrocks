@@ -61,6 +61,16 @@ def _to_trino_sql(sql: str) -> str:
         upper = token.upper()
         next_position = match.end()
         call_start = _next_non_space_position(sql, next_position)
+        if upper == "LOCATE" and call_start < len(sql) and sql[call_start] == "(":
+            call_end = _parenthesized_end(sql, call_start)
+            arguments = _split_arguments(sql[call_start + 1 : call_end - 1])
+            if len(arguments) != 2:
+                raise CompilationError("INTERNAL_ERROR", "$.sql", "invalid LOCATE call")
+            substring = _to_trino_sql(arguments[0])
+            string = _to_trino_sql(arguments[1])
+            output.append(f"STRPOS({string}, {substring})")
+            position = call_end
+            continue
         if upper in _STRING_EDGE_FUNCTIONS and call_start < len(sql) and sql[call_start] == "(":
             call_end = _parenthesized_end(sql, call_start)
             arguments = _split_arguments(sql[call_start + 1 : call_end - 1])

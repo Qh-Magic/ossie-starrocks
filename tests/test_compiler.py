@@ -512,11 +512,12 @@ class CompilerTests(unittest.TestCase):
         starrocks = self.compiler(model).compile(query)
         trino = self.compiler(model).compile(query, target="trino")
 
-        self.assertIn("STRPOS(t0.`status`, 'o')", starrocks.sql)
-        self.assertIn("(STRPOS(t0.`status`, 'o') > 0)", starrocks.sql)
-        self.assertIn("(STRPOS(t0.`status`, 'c') = 1)", starrocks.sql)
+        self.assertIn("LOCATE('o', t0.`status`)", starrocks.sql)
+        self.assertIn("(LOCATE('o', t0.`status`) > 0)", starrocks.sql)
+        self.assertIn("(LOCATE('c', t0.`status`) = 1)", starrocks.sql)
         self.assertIn("(RIGHT(t0.`status`, LENGTH('e')) = 'e')", starrocks.sql)
         self.assertIn('STRPOS(t0."status", \'o\')', trino.sql)
+        self.assertNotIn("LOCATE(", trino.sql)
         self.assertIn('(SUBSTRING(t0."status", -(LENGTH(\'e\'))) = \'e\')', trino.sql)
         for portable_name in ("CHARINDEX(", "CONTAINS(", "STARTSWITH(", "ENDSWITH("):
             self.assertNotIn(portable_name, starrocks.sql)

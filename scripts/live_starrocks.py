@@ -243,12 +243,12 @@ assert_same(
     "required string search functions",
     string_search.sql + " ORDER BY d0, d1, d2, d3",
     """
-    SELECT STRPOS(status, 'o'), STRPOS(status, 'o') > 0,
-           STRPOS(status, 'c') = 1, RIGHT(status, LENGTH('e')) = 'e',
+    SELECT LOCATE('o', status), LOCATE('o', status) > 0,
+           LOCATE('c', status) = 1, RIGHT(status, LENGTH('e')) = 'e',
            SUM(amount)
     FROM orders
-    GROUP BY STRPOS(status, 'o'), STRPOS(status, 'o') > 0,
-             STRPOS(status, 'c') = 1, RIGHT(status, LENGTH('e')) = 'e'
+    GROUP BY LOCATE('o', status), LOCATE('o', status) > 0,
+             LOCATE('c', status) = 1, RIGHT(status, LENGTH('e')) = 'e'
     ORDER BY 1, 2, 3, 4
     """,
 )

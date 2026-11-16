@@ -311,11 +311,11 @@ def _render_expr(expression: Expr, aliases: dict[str, str]) -> str:
 
 def _render_scalar_call(name: str, arguments: tuple[str, ...]) -> str:
     if name == "CHARINDEX":
-        return f"STRPOS({arguments[1]}, {arguments[0]})"
+        return f"LOCATE({arguments[0]}, {arguments[1]})"
     if name == "CONTAINS":
-        return f"(STRPOS({arguments[0]}, {arguments[1]}) > 0)"
+        return f"(LOCATE({arguments[1]}, {arguments[0]}) > 0)"
     if name == "STARTSWITH":
-        return f"(STRPOS({arguments[0]}, {arguments[1]}) = 1)"
+        return f"(LOCATE({arguments[1]}, {arguments[0]}) = 1)"
     if name == "ENDSWITH":
         return f"(RIGHT({arguments[0]}, LENGTH({arguments[1]})) = {arguments[1]})"
     if name == "IFF":
