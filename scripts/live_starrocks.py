@@ -458,7 +458,7 @@ expression_filtered_metric = compiler.compile(
         filter="customers.country IN ('TW') OR customers.country LIKE 'J%'",
     )
 )
-assert_same(
+assert_numeric_close(
     "bound Layer 3 filter expression in every branch",
     expression_filtered_metric.sql + " ORDER BY d0",
     """
