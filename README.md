@@ -104,7 +104,7 @@ executed = TrinoClient("http://localhost:8080", "analyst").execute(result.sql)
 print(executed.query_id, executed.rows)
 ```
 
-The client accepts only compiler-style `SELECT` or `WITH` statements and follows Trino `nextUri` pages only on the configured Trino origin. In accordance with the Trino client protocol, it performs a bounded retry for HTTP 429, 502, 503, and 504 responses; configure the limit with `--retries`. It intentionally does not implement the mutable session state needed by a general-purpose Trino client. Trino query failures are returned as structured diagnostics by the CLI with exit code 3. Authentication and TLS termination remain deployment concerns; do not expose an unauthenticated Trino coordinator publicly.
+The client accepts only compiler-style `SELECT` or `WITH` statements and follows Trino `nextUri` pages only on the configured Trino origin. In accordance with the Trino client protocol, it performs a bounded retry for HTTP 429, 502, 503, and 504 responses; configure the limit with `--retries`. Results are capped at 10,000 rows by default. If `--max-rows` is exceeded, the client sends `DELETE` to the current `nextUri` and returns a `TRINO_RESULT_LIMIT` diagnostic instead of accumulating an unbounded result in memory. It intentionally does not implement the mutable session state needed by a general-purpose Trino client. Trino query failures are returned as structured diagnostics by the CLI with exit code 3. Authentication and TLS termination remain deployment concerns; do not expose an unauthenticated Trino coordinator publicly.
 
 ## Supported profile
 

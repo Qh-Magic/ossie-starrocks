@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 
-from ossie_starrocks import Compiler, Query, TrinoClient
+from ossie_starrocks import Compiler, Query, TrinoClient, TrinoError
 
 
 CONTAINER = os.environ.get("TRINO_CONTAINER", "ossie-trino-live")
@@ -236,6 +236,17 @@ print(
     f"PASS published Trino quickstart with query id {quickstart_result['queryId']}: "
     f"{len(quickstart_result['rows'])} rows"
 )
+
+try:
+    TrinoClient("http://127.0.0.1:8080", "ossie-live", max_rows=1).execute(
+        "SELECT orderkey FROM tpch.tiny.lineitem"
+    )
+except TrinoError as error:
+    if error.code != "TRINO_RESULT_LIMIT" or not error.query_id:
+        raise
+    print(f"PASS Trino result limit cancelled query {error.query_id}")
+else:
+    raise AssertionError("Trino result limit did not reject a high-cardinality result")
 
 staged_true_division = compiler.compile(
     Query(

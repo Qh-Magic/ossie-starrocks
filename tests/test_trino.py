@@ -111,6 +111,8 @@ class TrinoClientTests(unittest.TestCase):
             TrinoClient("http://trino.test", "analyst\nX-Trino-Role: admin")
         with self.assertRaisesRegex(ValueError, "positive finite"):
             TrinoClient("http://trino.test", "analyst", timeout=0)
+        with self.assertRaisesRegex(ValueError, "positive integer"):
+            TrinoClient("http://trino.test", "analyst", max_rows=0)
 
     def test_rejects_non_query_statements(self):
         client = TrinoClient("http://trino.test", "analyst", _open=_Open())
@@ -152,6 +154,30 @@ class TrinoClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(TrinoError, "HTTP 502"):
             client.execute("SELECT 1")
+
+    def test_cancels_query_when_result_limit_is_exceeded(self):
+        open_request = _Open(
+            {
+                "id": "query-6",
+                "columns": [{"name": "x", "type": "bigint"}],
+                "data": [[1], [2]],
+                "nextUri": "http://trino.test/v1/statement/query-6/1",
+            },
+            {},
+        )
+        client = TrinoClient(
+            "http://trino.test",
+            "analyst",
+            max_rows=1,
+            _open=open_request,
+        )
+
+        with self.assertRaises(TrinoError) as raised:
+            client.execute("SELECT x FROM numbers")
+
+        self.assertEqual("TRINO_RESULT_LIMIT", raised.exception.code)
+        self.assertEqual("query-6", raised.exception.query_id)
+        self.assertEqual("DELETE", open_request.requests[1][0].method)
 
 
 if __name__ == "__main__":

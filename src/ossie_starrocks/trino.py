@@ -42,6 +42,7 @@ class TrinoClient:
         schema: str | None = None,
         timeout: float = 30.0,
         max_retries: int = 3,
+        max_rows: int = 10_000,
         _open: Callable[..., object] = urlopen,
         _sleep: Callable[[float], None] = time.sleep,
     ):
@@ -52,6 +53,8 @@ class TrinoClient:
             raise ValueError("timeout must be a positive finite number")
         if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be a non-negative integer")
+        if not isinstance(max_rows, int) or isinstance(max_rows, bool) or max_rows <= 0:
+            raise ValueError("max_rows must be a positive integer")
         self._origin = (parts.scheme.lower(), parts.netloc.lower())
         self._statement_url = urljoin(url.rstrip("/") + "/", "v1/statement")
         self._headers = {
@@ -65,6 +68,7 @@ class TrinoClient:
             self._headers["X-Trino-Schema"] = self._header("schema", schema)
         self._timeout = timeout
         self._max_retries = max_retries
+        self._max_rows = max_rows
         self._open = _open
         self._sleep = _sleep
 
@@ -91,10 +95,20 @@ class TrinoClient:
                 columns = page_columns
             rows.extend(self._rows(page.get("data", []), query_id))
             next_uri = page.get("nextUri")
+            if next_uri is not None and (
+                not isinstance(next_uri, str) or self._origin_of(next_uri) != self._origin
+            ):
+                raise TrinoError("TRINO_PROTOCOL_ERROR", "nextUri must use the configured Trino origin", query_id)
+            if len(rows) > self._max_rows:
+                if isinstance(next_uri, str):
+                    self._cancel(next_uri)
+                raise TrinoError(
+                    "TRINO_RESULT_LIMIT",
+                    f"Trino result exceeded the {self._max_rows} row limit",
+                    query_id,
+                )
             if next_uri is None:
                 break
-            if not isinstance(next_uri, str) or self._origin_of(next_uri) != self._origin:
-                raise TrinoError("TRINO_PROTOCOL_ERROR", "nextUri must use the configured Trino origin", query_id)
             page = self._request(next_uri)
 
         if columns and any(len(row) != len(columns) for row in rows):
@@ -119,6 +133,14 @@ class TrinoClient:
         if not isinstance(payload, dict):
             raise TrinoError("TRINO_PROTOCOL_ERROR", "Trino response must be a JSON object")
         return payload
+
+    def _cancel(self, next_uri: str) -> None:
+        request = Request(next_uri, headers=self._headers, method="DELETE")
+        try:
+            with self._open(request, timeout=self._timeout):
+                pass
+        except (HTTPError, URLError, OSError):
+            pass
 
     @staticmethod
     def _retry_delay(error: HTTPError) -> float:
